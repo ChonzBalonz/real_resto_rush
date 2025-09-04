@@ -1157,4 +1157,10 @@
 			logCrashReport(reason, { phase: 'unhandledrejection' });
 		} catch {}
 	});
+	// Mobile-only niceties
+	canvas.addEventListener('touchstart', () => {
+		try { if (_audio && _audio.state === 'suspended') { _audio.resume?.(); } } catch {}
+	});
+	document.addEventListener('gesturestart', (e) => { e.preventDefault(); }, { passive: false });
+	document.addEventListener('contextmenu', (e) => { if (e.target === canvas) e.preventDefault(); });
 })(); 

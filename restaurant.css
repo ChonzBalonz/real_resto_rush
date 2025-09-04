@@ -235,3 +235,20 @@ html, body {
 body, #app, #game {
 	overscroll-behavior: contain;
 }
+
+/* iPhone 14 portrait optimizations (~390x844 CSS px at 3x) */
+@media (max-width: 430px) and (orientation: portrait) {
+	.topbar h1 { font-size: 16px; }
+	.hud { gap: 10px; font-size: 12px; }
+	.sidebar { gap: 10px; }
+	.sidebar button { padding: 14px; font-size: 14px; }
+	#emp-list li { font-size: 13px; }
+	/* Keep canvas as big as possible above the fold */
+	#game { aspect-ratio: 9/16; }
+	.bottombar { position: sticky; bottom: 0; padding-bottom: calc(env(safe-area-inset-bottom) + 8px); }
+	.mobile-toggle {
+		position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 16px);
+		appearance: none; border: 1px solid #262738; background: #1c1d2a; color: var(--text);
+		padding: 10px 12px; border-radius: 999px; font-weight: 700; z-index: 10;
+	}
+}
