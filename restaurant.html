@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Restaurant Rush</title>
+	<link rel="stylesheet" href="restaurant.css" />
+</head>
+<body>
+	<div id="app">
+		<header class="topbar">
+			<h1>Restaurant Rush</h1>
+			<div class="hud">
+				<div class="hud-item">Day: <span id="day">1</span></div>
+				<div class="hud-item">Cash: $<span id="cash">0</span></div>
+				<div class="hud-item">Reputation: <span id="rep">0</span></div>
+				<div class="hud-item health">Health:
+					<div class="healthbar">
+						<div id="health-fill"></div>
+					</div>
+				</div>
+			</div>
+		</header>
+		<main class="main">
+			<canvas id="game" width="960" height="540"></canvas>
+			<aside class="sidebar">
+				<h2>Upgrades</h2>
+				<button id="upgrade-speed">Faster Cook ($50)</button>
+				<button id="upgrade-capacity">Extra Counter ($75)</button>
+				<button id="upgrade-rep">Better Decor ($40)</button>
+				<div class="log" id="log"></div>
+				<div class="shop">
+					<h2>Employee Shop</h2>
+					<div class="shop-list">
+						<button class="hire-btn" data-emp="junior">Hire Junior ($60)</button>
+						<button class="hire-btn" data-emp="cook">Hire Cook ($120)</button>
+						<button class="hire-btn" data-emp="barista">Hire Barista ($90)</button>
+						<button class="hire-btn" data-emp="runner">Hire Runner ($80)</button>
+						<button class="hire-btn" data-emp="pro">Hire Pro Chef ($220)</button>
+					</div>
+					<div class="owned">
+						<h3>Employees</h3>
+						<ul id="emp-list"></ul>
+					</div>
+				</div>
+			</aside>
+		</main>
+		<footer class="bottombar">
+			<button id="start-day">Start Day</button>
+			<button id="pause">Pause</button>
+			<button id="reset">Reset</button>
+		</footer>
+	</div>
+	<script src="restaurant.js"></script>
+</body>
+</html> 
