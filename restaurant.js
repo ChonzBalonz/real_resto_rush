@@ -20,6 +20,89 @@
 		shopButtons: Array.from(document.querySelectorAll(".hire-btn")),
 	};
 
+	// Crash diagnostics
+	const _breadcrumbs = [];
+	function addBreadcrumb(type, details) {
+		try {
+			_breadcrumbs.push({ at: performance.now(), type, details });
+			if (_breadcrumbs.length > 200) _breadcrumbs.shift();
+		} catch {}
+	}
+
+	function createCrashReport(err, context = {}) {
+		const safeCustomers = state.customers.slice(0, 50).map(c => ({
+			id: c.id, x: Math.round(c.x), y: Math.round(c.y), state: c.state, patience: Number(c.patience?.toFixed?.(2) ?? c.patience)
+		}));
+		const safeTickets = state.tickets.slice(0, 50).map(t => ({
+			id: t.id, customerId: t.customerId, item: t.item?.name, state: t.state, stepIndex: t.stepIndex
+		}));
+		const safeStations = state.stations.map(s => ({ key: s.key, capacity: s.slots.length, busy: s.slots.filter(sl => !!sl.job).length }));
+		const safeEmployees = state.employees.slice(0, 50).map(e => ({ id: e.id, role: e.role, station: e.station, phase: e.phase, busy: e.busy }));
+		const report = {
+			meta: {
+				when: new Date().toISOString(),
+				userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'n/a',
+				seed: state.seed,
+				lastFrameDtMs: context.lastFrameDtMs ?? null,
+				phase: context.phase || 'unknown',
+			},
+			error: {
+				name: err?.name || String(err?.constructor?.name || 'Error'),
+				message: err?.message || String(err),
+				stack: err?.stack || null,
+			},
+			state: {
+				day: state.day,
+				cash: state.cash,
+				rep: state.rep,
+				health: state.health,
+				healthMax: state.healthMax,
+				elapsed: state.elapsed,
+				spawnTimer: state.spawnTimer,
+				difficulty: state.difficulty,
+				baseSpawnMs: state.baseSpawnMs,
+				combo: state.combo,
+				lastServeAt: state.lastServeAt,
+				customersCount: state.customers.length,
+				ticketsCount: state.tickets.length,
+				stationsCount: state.stations.length,
+				employeesCount: state.employees.length,
+			},
+			preview: {
+				customers: safeCustomers,
+				tickets: safeTickets,
+				stations: safeStations,
+				employees: safeEmployees,
+				layoutSizes: {
+					customers: layout.customers.size,
+					tickets: layout.tickets.size,
+					stations: layout.stations.size,
+				},
+				breadcrumbs: _breadcrumbs.slice(-100),
+			},
+		};
+		return report;
+	}
+
+	function logCrashReport(err, context = {}) {
+		try {
+			const report = createCrashReport(err, context);
+			const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement("a");
+			a.href = url;
+			a.download = `restaurant-crash-${Date.now()}.json`;
+			a.textContent = "Download crash report";
+			a.style.display = "inline-block";
+			a.style.margin = "4px 0";
+			log("Crash captured. Please download the crash report and share it for debugging.");
+			ui.log.appendChild(a);
+			ui.log.appendChild(document.createElement("br"));
+		} catch (e) {
+			console.error("Failed to create crash report", e);
+		}
+	}
+
 	// Simple bleep SFX (singleton AudioContext with throttle)
 	let _audio = null;
 	let _lastBleepAt = 0;
@@ -125,12 +208,14 @@
 	}
 
 	function endDay() {
-		state.running = false;
+		// Endless mode: seamlessly advance to the next day without stopping the game
 		state.day += 1;
 		state.difficulty += 0.25;
 		// slightly increase spawn rate base each day to ramp difficulty
 		state.baseSpawnMs = Math.max(2000, state.baseSpawnMs - 500);
 		log(`Day ended. New day: ${state.day}`);
+		// Reset day timers/queues but keep the game running
+		resetDay();
 		updateHUD();
 	}
 
@@ -334,7 +419,8 @@
 		state.lastServeAtPrev = state.lastServeAt;
 		log(`Served ${ticket.item.name} (+$${tip} tip${comboBonus?` +$${comboBonus} combo`:``})`);
 		state.tickets = state.tickets.filter(t => t.id !== ticket.id);
-		customer.state = "served";
+		// Immediately remove the customer after they are served
+		state.customers = state.customers.filter(c => c.id !== customer.id);
 		bleep(1040, 0.08, "square");
 		updateHUD();
 		return true;
@@ -777,6 +863,7 @@
 		const dt = Math.min(50, now - last);
 		last = now;
 		try {
+			addBreadcrumb('loop', { dt });
 			update(dt);
 			draw();
 			if (state.gameOver) {
@@ -787,6 +874,7 @@
 			state.paused = true;
 			console.error(err);
 			log(`Error: ${err?.message || err}`);
+			logCrashReport(err, { lastFrameDtMs: dt, phase: 'loop' });
 		}
 		requestAnimationFrame(loop);
 	}
@@ -800,11 +888,22 @@
 		return { x: (evt.clientX - r.left) * sx, y: (evt.clientY - r.top) * sy };
 	}
 
+	// Touch helpers (map single-finger touch to mouse semantics)
+	function getTouch(evt) {
+		const t = evt.touches && evt.touches[0] ? evt.touches[0] : (evt.changedTouches && evt.changedTouches[0]);
+		if (!t) return null;
+		const r = canvas.getBoundingClientRect();
+		const sx = canvas.width / r.width;
+		const sy = canvas.height / r.height;
+		return { x: (t.clientX - r.left) * sx, y: (t.clientY - r.top) * sy };
+	}
+
 	let mouseDown = false;
 	canvas.addEventListener("mousedown", (e) => {
 		if (!state.running) return;
 		mouseDown = true;
 		const m = getMouse(e);
+		addBreadcrumb('input', { type: 'mousedown', x: Math.round(m.x), y: Math.round(m.y) });
 		// pick ticket under mouse
 		let picked = null;
 		for (const [id, rect] of layout.tickets) {
@@ -836,9 +935,92 @@
 			}
 		}
 	});
+	// Touch -> mouse mapping
+	canvas.addEventListener("touchstart", (e) => {
+		if (!state.running) return;
+		if (e.touches && e.touches.length > 1) return; // ignore multi-touch for now
+		e.preventDefault();
+		mouseDown = true;
+		const m = getTouch(e);
+		if (!m) return;
+		addBreadcrumb('input', { type: 'touchstart', x: Math.round(m.x), y: Math.round(m.y) });
+		// reuse mousedown logic
+		const evt = { clientX: m.x, clientY: m.y };
+		const mm = getMouse(evt);
+		// pick ticket under touch
+		let picked = null;
+		for (const [id, rect] of layout.tickets) {
+			if (mm.x >= rect.x && mm.x <= rect.x + rect.w && mm.y >= rect.y && mm.y <= rect.y + rect.h) { picked = { id, rect }; }
+		}
+		if (picked) {
+			const t = state.tickets.find(tk => tk.id === picked.id);
+			if (!t) return;
+			if (t.state === "ready") {
+				const cust = state.customers.find(c => c.id === t.customerId && c.state === "waiting");
+				if (cust) {
+					deliverTicketToCustomer(t, cust);
+					state.cash += 1;
+					log("Customer tipped +$1");
+					updateHUD();
+				}
+				return;
+			}
+			if (t.state !== "in_station") {
+				t.state = "dragging";
+				t._drag.x = mm.x;
+				t._drag.y = mm.y;
+				t._drag.offX = mm.x - picked.rect.x;
+				t._drag.offY = mm.y - picked.rect.y;
+				const step = t.recipe[t.stepIndex];
+				state.highlightStationKey = step?.station || null;
+			}
+		}
+	}, { passive: false });
+	canvas.addEventListener("touchmove", (e) => {
+		if (!mouseDown) return;
+		if (e.touches && e.touches.length > 1) return;
+		e.preventDefault();
+		const m = getTouch(e);
+		if (!m) return;
+		addBreadcrumb('input', { type: 'touchmove', x: Math.round(m.x), y: Math.round(m.y) });
+		const t = state.tickets.find(tk => tk.state === "dragging");
+		if (t) {
+			t._drag.x = m.x;
+			t._drag.y = m.y;
+		}
+	}, { passive: false });
+	canvas.addEventListener("touchend", (e) => {
+		mouseDown = false;
+		e.preventDefault();
+		const m = getTouch(e) || { x: 0, y: 0 };
+		addBreadcrumb('input', { type: 'touchend', x: Math.round(m.x), y: Math.round(m.y) });
+		const t = state.tickets.find(tk => tk.state === "dragging");
+		if (!t) { state.highlightStationKey = null; return; }
+		let dropped = false;
+		for (const [key, rect] of layout.stations) {
+			if (m.x >= rect.x && m.x <= rect.x + rect.w && m.y >= rect.y && m.y <= rect.y + rect.h) {
+				const station = state.stations.find(s => s.key === key);
+				if (tryPlaceTicketOnStation(t, station)) { dropped = true; break; }
+			}
+		}
+		if (!dropped) {
+			for (const [cid, rect] of layout.customers) {
+				if (m.x >= rect.x && m.x <= rect.x + rect.w && m.y >= rect.y && m.y <= rect.y + rect.h) {
+					const cust = state.customers.find(c => c.id === cid);
+					if (deliverTicketToCustomer(t, cust)) { dropped = true; break; }
+				}
+			}
+		}
+		if (!dropped) {
+			bleep(220, 0.06, "sawtooth");
+			t.state = t.stepIndex >= t.recipe.length ? "ready" : "tray";
+		}
+		state.highlightStationKey = null;
+	}, { passive: false });
 	canvas.addEventListener("mousemove", (e) => {
 		if (!mouseDown) return;
 		const m = getMouse(e);
+		addBreadcrumb('input', { type: 'mousemove', x: Math.round(m.x), y: Math.round(m.y) });
 		const t = state.tickets.find(tk => tk.state === "dragging");
 		if (t) {
 			t._drag.x = m.x;
@@ -848,6 +1030,7 @@
 	canvas.addEventListener("mouseup", (e) => {
 		mouseDown = false;
 		const m = getMouse(e);
+		addBreadcrumb('input', { type: 'mouseup', x: Math.round(m.x), y: Math.round(m.y) });
 		const t = state.tickets.find(tk => tk.state === "dragging");
 		if (!t) { state.highlightStationKey = null; return; }
 		// drop on station?
@@ -883,6 +1066,7 @@
 		ui.pause.textContent = state.paused ? "Resume" : "Pause";
 	});
 	ui.reset.addEventListener("click", () => {
+		addBreadcrumb('ui', { action: 'reset' });
 		state.running = false;
 		state.gameOver = false;
 		state.day = 1;
@@ -939,6 +1123,7 @@
 		state.gameOver = true;
 		state.running = false;
 		log("Game Over! Health depleted.");
+		addBreadcrumb('state', { event: 'gameOver' });
 	}
 
 	function drawGameOver() {
@@ -958,4 +1143,18 @@
 	// no starter employees; start with none
 	updateHUD();
 	log("Welcome! Hire employees or drag tickets yourself. Keep your health up!");
+	// Global error hooks for diagnostics
+	window.addEventListener('error', (e) => {
+		try {
+			log(`Unhandled Error: ${e?.error?.message || e.message || e}`);
+			logCrashReport(e.error || e, { phase: 'window.error' });
+		} catch {}
+	});
+	window.addEventListener('unhandledrejection', (e) => {
+		try {
+			const reason = e?.reason || new Error('unhandledrejection with unknown reason');
+			log(`Unhandled Rejection: ${reason?.message || reason}`);
+			logCrashReport(reason, { phase: 'unhandledrejection' });
+		} catch {}
+	});
 })(); 
