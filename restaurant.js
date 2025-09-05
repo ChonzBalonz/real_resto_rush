@@ -1060,13 +1060,10 @@ import { renderAll } from "./src/render/draw.js";
 		const m = getTouch(e);
 		if (!m) return;
 		addBreadcrumb('input', { type: 'touchstart', x: Math.round(m.x), y: Math.round(m.y) });
-		// reuse mousedown logic
-		const evt = { clientX: m.x, clientY: m.y };
-		const mm = getMouse(evt);
-		// pick ticket under touch
+		// pick ticket under touch (use touch coords directly; already scaled)
 		let picked = null;
 		for (const [id, rect] of layout.tickets) {
-			if (mm.x >= rect.x && mm.x <= rect.x + rect.w && mm.y >= rect.y && mm.y <= rect.y + rect.h) { picked = { id, rect }; }
+			if (m.x >= rect.x && m.x <= rect.x + rect.w && m.y >= rect.y && m.y <= rect.y + rect.h) { picked = { id, rect }; }
 		}
 		if (picked) {
 			const t = state.tickets.find(tk => tk.id === picked.id);
@@ -1084,10 +1081,10 @@ import { renderAll } from "./src/render/draw.js";
 			}
 			if (t.state !== "in_station") {
 				t.state = "dragging";
-				t._drag.x = mm.x;
-				t._drag.y = mm.y;
-				t._drag.offX = mm.x - picked.rect.x;
-				t._drag.offY = mm.y - picked.rect.y;
+				t._drag.x = m.x;
+				t._drag.y = m.y;
+				t._drag.offX = m.x - picked.rect.x;
+				t._drag.offY = m.y - picked.rect.y;
 				const step = t.recipe[t.stepIndex];
 				state.highlightStationKey = step?.station || null;
 			}
