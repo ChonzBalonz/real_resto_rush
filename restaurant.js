@@ -1,129 +1,20 @@
+import { bleep, resumeAudio } from "./src/audio/sfx.js";
+import { MENU, step, STATION_TYPES, EMP_TYPES, VIP_SPAWN_CHANCE } from "./src/core/constants.js";
+import { ui, log, updateEmpList } from "./src/ui/ui.js";
+import { addBreadcrumb, logCrashReport } from "./src/diagnostics/crash.js";
+import { renderAll } from "./src/render/draw.js";
+
 (function() {
 	"use strict";
 
 	const canvas = document.getElementById("game");
 	const ctx = canvas.getContext("2d");
 
-	const ui = {
-		day: document.getElementById("day"),
-		cash: document.getElementById("cash"),
-		rep: document.getElementById("rep"),
-		healthFill: document.getElementById("health-fill"),
-		log: document.getElementById("log"),
-		start: document.getElementById("start-day"),
-		pause: document.getElementById("pause"),
-		reset: document.getElementById("reset"),
-		uSpeed: document.getElementById("upgrade-speed"),
-		uCap: document.getElementById("upgrade-capacity"),
-		uRep: document.getElementById("upgrade-rep"),
-		empList: document.getElementById("emp-list"),
-		shopButtons: Array.from(document.querySelectorAll(".hire-btn")),
-	};
+	// ui moved to src/ui/ui.js
 
-	// Crash diagnostics
-	const _breadcrumbs = [];
-	function addBreadcrumb(type, details) {
-		try {
-			_breadcrumbs.push({ at: performance.now(), type, details });
-			if (_breadcrumbs.length > 200) _breadcrumbs.shift();
-		} catch {}
-	}
+	// Crash diagnostics moved to src/diagnostics/crash.js
 
-	function createCrashReport(err, context = {}) {
-		const safeCustomers = state.customers.slice(0, 50).map(c => ({
-			id: c.id, x: Math.round(c.x), y: Math.round(c.y), state: c.state, patience: Number(c.patience?.toFixed?.(2) ?? c.patience)
-		}));
-		const safeTickets = state.tickets.slice(0, 50).map(t => ({
-			id: t.id, customerId: t.customerId, item: t.item?.name, state: t.state, stepIndex: t.stepIndex
-		}));
-		const safeStations = state.stations.map(s => ({ key: s.key, capacity: s.slots.length, busy: s.slots.filter(sl => !!sl.job).length }));
-		const safeEmployees = state.employees.slice(0, 50).map(e => ({ id: e.id, role: e.role, station: e.station, phase: e.phase, busy: e.busy }));
-		const report = {
-			meta: {
-				when: new Date().toISOString(),
-				userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'n/a',
-				seed: state.seed,
-				lastFrameDtMs: context.lastFrameDtMs ?? null,
-				phase: context.phase || 'unknown',
-			},
-			error: {
-				name: err?.name || String(err?.constructor?.name || 'Error'),
-				message: err?.message || String(err),
-				stack: err?.stack || null,
-			},
-			state: {
-				day: state.day,
-				cash: state.cash,
-				rep: state.rep,
-				health: state.health,
-				healthMax: state.healthMax,
-				elapsed: state.elapsed,
-				spawnTimer: state.spawnTimer,
-				difficulty: state.difficulty,
-				baseSpawnMs: state.baseSpawnMs,
-				combo: state.combo,
-				lastServeAt: state.lastServeAt,
-				customersCount: state.customers.length,
-				ticketsCount: state.tickets.length,
-				stationsCount: state.stations.length,
-				employeesCount: state.employees.length,
-			},
-			preview: {
-				customers: safeCustomers,
-				tickets: safeTickets,
-				stations: safeStations,
-				employees: safeEmployees,
-				layoutSizes: {
-					customers: layout.customers.size,
-					tickets: layout.tickets.size,
-					stations: layout.stations.size,
-				},
-				breadcrumbs: _breadcrumbs.slice(-100),
-			},
-		};
-		return report;
-	}
-
-	function logCrashReport(err, context = {}) {
-		try {
-			const report = createCrashReport(err, context);
-			const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement("a");
-			a.href = url;
-			a.download = `restaurant-crash-${Date.now()}.json`;
-			a.textContent = "Download crash report";
-			a.style.display = "inline-block";
-			a.style.margin = "4px 0";
-			log("Crash captured. Please download the crash report and share it for debugging.");
-			ui.log.appendChild(a);
-			ui.log.appendChild(document.createElement("br"));
-		} catch (e) {
-			console.error("Failed to create crash report", e);
-		}
-	}
-
-	// Simple bleep SFX (singleton AudioContext with throttle)
-	let _audio = null;
-	let _lastBleepAt = 0;
-	function bleep(freq = 440, duration = 0.07, type = "square") {
-		try {
-			const now = performance.now();
-			if (now - _lastBleepAt < 40) return; // throttle
-			_lastBleepAt = now;
-			if (!_audio) {
-				_audio = new (window.AudioContext || window.webkitAudioContext)();
-			}
-			const osc = _audio.createOscillator();
-			const gain = _audio.createGain();
-			osc.type = type;
-			osc.frequency.value = freq;
-			gain.gain.value = 0.05;
-			osc.connect(gain).connect(_audio.destination);
-			osc.start();
-			setTimeout(() => { try { osc.stop(); osc.disconnect(); gain.disconnect(); } catch {} }, duration * 1000);
-		} catch {}
-	}
+	// bleep SFX moved to src/audio/sfx.js
 
 	// Employee skin image
 	const EMP_SKIN_IMG = new Image();
@@ -159,9 +50,62 @@
 		employees: [],
 		highlightStationKey: null,
 		maxWaitingCustomers: 4,
+		fx: [],
+		tables: [], // New: dining tables
 	};
 
 	const rng = mulberry32(state.seed);
+
+	// Simple persistence for highest reached day
+	const SAVE_KEY = "restaurant_rush_highest_day_v1";
+	function loadHighestDay() {
+		try {
+			const v = localStorage.getItem(SAVE_KEY);
+			const n = v ? parseInt(v, 10) : 0;
+			return Number.isFinite(n) && n > 0 ? n : 0;
+		} catch { return 0; }
+	}
+	function saveHighestDay(day) {
+		try { localStorage.setItem(SAVE_KEY, String(Math.max(1, day))); } catch {}
+	}
+	function clearHighestDay() {
+		try { localStorage.removeItem(SAVE_KEY); } catch {}
+	}
+
+	// Employee leveling and stats
+	function xpToNext(level) {
+		return 30 + (level - 1) * 10;
+	}
+	function recomputeEmpStats(emp) {
+		const lv = emp.level || 1;
+		const specialStacks = Math.floor(lv / 10);
+		const speedMult = 1 + 0.03 * (lv - 1) + 0.10 * specialStacks;
+		emp.speed = (emp.baseSpeed || emp.speed || 1) * speedMult;
+		emp.quality = (emp.baseQuality || emp.quality || 1) * (1 + 0.02 * (lv - 1));
+		emp.specialStacks = specialStacks;
+	}
+	function awardXp(emp, amount) {
+		if (!emp || !Number.isFinite(amount) || amount <= 0) return;
+		emp.xp = (emp.xp || 0) + Math.floor(amount);
+		let leveled = false;
+		let prevStacks = emp.specialStacks || 0;
+		while (emp.xp >= emp.xpToNext) {
+			emp.xp -= emp.xpToNext;
+			emp.level = (emp.level || 1) + 1;
+			emp.xpToNext = xpToNext(emp.level);
+			recomputeEmpStats(emp);
+			leveled = true;
+		}
+		if (leveled) {
+			bleep(900, 0.05, "triangle");
+			if ((emp.specialStacks || 0) > prevStacks) {
+				log(`${emp.name} reached Lv.${emp.level} and gained a special perk!`);
+			} else {
+				log(`${emp.name} reached Lv.${emp.level}!`);
+			}
+			updateEmpList(state.employees);
+		}
+	}
 
 	function mulberry32(a) {
 		return function() {
@@ -172,17 +116,7 @@
 		};
 	}
 
-	function log(msg) {
-		const el = document.createElement("div");
-		el.textContent = msg;
-		ui.log.appendChild(el);
-		// Cap log lines to avoid DOM bloat
-		const maxLines = 200;
-		while (ui.log.childNodes.length > maxLines) {
-			ui.log.removeChild(ui.log.firstChild);
-		}
-		ui.log.scrollTop = ui.log.scrollHeight;
-	}
+	// log moved to src/ui/ui.js
 
 	function resetDay() {
 		state.elapsed = 0;
@@ -192,10 +126,22 @@
 		for (const st of state.stations) {
 			st.slots = Array.from({ length: st.baseCapacity + state.capacityLevel }, () => ({ job: null }));
 		}
+		// Clear any table occupancy at the start of a new day
+		if (state.tables) {
+			for (const t of state.tables) t.occupiedBy = null;
+		}
 	}
 
 	function startDay() {
 		if (state.running) return;
+		// If there is saved progress and we're at Day 1, prompt to continue
+		const highest = loadHighestDay();
+		if (highest > 1 && state.day === 1) {
+			const cont = confirm(`Continue from Day ${highest}? (Cancel to start Day 1)`);
+			if (cont) {
+				state.day = highest;
+			}
+		}
 		resetDay();
 		state.running = true;
 		state.paused = false;
@@ -213,6 +159,11 @@
 		state.difficulty += 0.25;
 		// slightly increase spawn rate base each day to ramp difficulty
 		state.baseSpawnMs = Math.max(2000, state.baseSpawnMs - 500);
+		// Save progress: record highest day reached so far
+		try {
+			const highest = loadHighestDay();
+			if (state.day > highest) saveHighestDay(state.day);
+		} catch {}
 		log(`Day ended. New day: ${state.day}`);
 		// Reset day timers/queues but keep the game running
 		resetDay();
@@ -241,34 +192,29 @@
 			const cost = 40 + state.repLevel * 25;
 			ui.uRep.classList.toggle('can-afford', state.cash >= cost);
 		}
-		// Toggle affordability glow for employee hire buttons
+		// Toggle affordability/owned state for employee hire buttons
 		ui.shopButtons?.forEach(btn => {
 			const key = btn.getAttribute('data-emp');
 			const def = EMP_TYPES[key];
 			if (!def) return;
-			btn.classList.toggle('can-afford', state.cash >= def.cost);
+			const owned = state.employees.some(e => e.typeKey === key);
+			if (owned) {
+				btn.disabled = true;
+				btn.classList.remove('can-afford');
+				btn.textContent = `${def.name} (Owned)`;
+			} else {
+				btn.disabled = false;
+				btn.textContent = `Hire ${def.name} ($${def.cost})`;
+				btn.classList.toggle('can-afford', state.cash >= def.cost);
+			}
 		});
-		updateEmpList();
+		updateEmpList(state.employees);
 	}
 
-	// Menu and recipes
-	const MENU = [
-		{ name: "Soup", price: 8, recipe: [ step("cook", 3500) ] },
-		{ name: "Burger", price: 12, recipe: [ step("prep", 2500), step("cook", 4000) ] },
-		{ name: "Salad", price: 7, recipe: [ step("prep", 2200) ] },
-		{ name: "Pasta", price: 11, recipe: [ step("prep", 2500), step("cook", 3500) ] },
-		{ name: "Coffee", price: 4, recipe: [ step("drink", 1500) ] },
-	];
-
-	function step(station, time) { return { station, time }; }
+	// Menu and recipes moved to src/core/constants.js
 	function randomMenuItem() { return MENU[Math.floor(rng() * MENU.length)]; }
 
-	// Stations layout
-	const STATION_TYPES = [
-		{ key: "prep", label: "Prep" },
-		{ key: "cook", label: "Cook" },
-		{ key: "drink", label: "Drink" },
-	];
+	// Stations layout moved to src/core/constants.js
 
 	function createStations() {
 		state.stations = STATION_TYPES.map((t, i) => ({
@@ -282,23 +228,51 @@
 	}
 	createStations();
 
-	// Employees
-	const EMP_TYPES = {
-		junior: { name: "Junior", cost: 60, role: "station", station: "prep", speed: 0.8, quality: 0.9 },
-		cook: { name: "Cook", cost: 120, role: "station", station: "cook", speed: 1.0, quality: 1.0 },
-		barista: { name: "Barista", cost: 90, role: "station", station: "drink", speed: 1.1, quality: 1.0 },
-		runner: { name: "Runner", cost: 80, role: "runner", speed: 0.9 },
-		pro: { name: "Pro Chef", cost: 220, role: "station", station: "cook", speed: 1.35, quality: 1.1 },
-	};
+	// Create dining room tables (simple grid in top area of canvas)
+	function createDiningTables() {
+		const bottomMargin = 130; // station panel height
+		const floorH = canvas.height - bottomMargin;
+		const cols = 4;
+		const rows = 2;
+		const gapX = 40;
+		const gapY = 60;
+		const marginX = 40;
+		const marginY = 40;
+		const usableW = canvas.width - marginX * 2 - gapX * (cols - 1);
+		const usableH = floorH - marginY * 2 - gapY * (rows - 1);
+		const tableW = Math.max(90, Math.min(140, Math.floor(usableW / cols)));
+		const tableH = Math.max(50, Math.min(80, Math.floor(usableH / rows)));
+		const extraW = (canvas.width - marginX * 2) - (cols * tableW + (cols - 1) * gapX);
+		const xStart = marginX + Math.floor(extraW / 2);
+		const extraH = (floorH - marginY * 2) - (rows * tableH + (rows - 1) * gapY);
+		const yStart = marginY + Math.floor(extraH / 2);
+		const tables = [];
+		let id = 0;
+		for (let r = 0; r < rows; r++) {
+			for (let c = 0; c < cols; c++) {
+				const x = xStart + c * (tableW + gapX);
+				const y = yStart + r * (tableH + gapY);
+				tables.push({ id: `t${id++}`, x, y, w: tableW, h: tableH, occupiedBy: null });
+			}
+		}
+		state.tables = tables;
+	}
+	createDiningTables();
+
+	// Employees moved to src/core/constants.js
 
 	function hireEmployee(key, free = false) {
 		const def = EMP_TYPES[key];
 		if (!def) return;
+		// Enforce one-per-type: if we already have this type key, disallow
+		const alreadyOwned = state.employees.some(e => e.typeKey === key);
+		if (alreadyOwned) { log(`${def.name} already hired.`); return; }
 		if (!free && state.cash < def.cost) { log(`Need $${def.cost} to hire ${def.name}.`); return; }
 		if (!free) state.cash -= def.cost;
 		const emp = {
 			id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.floor(rng()*1e6)}`,
 			...def,
+			typeKey: key,
 			busy: false,
 			carrying: null,
 			thinkCd: 0,
@@ -306,21 +280,19 @@
 			x: 40 + Math.floor(rng() * 60),
 			y: canvas.height - 160 + Math.floor(rng() * 40),
 			task: null,
+			level: 1,
+			xp: 0,
+			xpToNext: xpToNext(1),
+			baseSpeed: def.speed ?? 1,
+			baseQuality: def.quality ?? 1,
 		};
+		recomputeEmpStats(emp);
 		state.employees.push(emp);
 		log(`Hired ${def.name}!`);
 		updateHUD();
 	}
 
-	function updateEmpList() {
-		if (!ui.empList) return;
-		ui.empList.innerHTML = "";
-		for (const e of state.employees) {
-			const li = document.createElement("li");
-			li.textContent = `${e.name}${e.role==='station'?` (${e.station})`:''} – x${e.speed}`;
-			ui.empList.appendChild(li);
-		}
-	}
+	// updateEmpList moved to src/ui/ui.js
 
 	ui.shopButtons?.forEach(btn => {
 		btn.addEventListener("click", () => {
@@ -341,6 +313,7 @@
 			state: "tray", // tray | claimed | in_station | ready | dragging | delivering
 			assignedTo: null,
 			_drag: { x: 0, y: 0, offX: 0, offY: 0 },
+			helpers: [], // employee ids who worked on this order
 		};
 	}
 
@@ -348,20 +321,39 @@
 	function spawnCustomer() {
 		const patience = 9 + Math.floor(rng() * 5) - Math.min(2, state.repLevel);
 		const menu = randomMenuItem();
+		const isVip = rng() < VIP_SPAWN_CHANCE;
+		// Assign a free table if available
+		let assignedTable = null;
+		if (state.tables && state.tables.length) {
+			assignedTable = state.tables.find(t => !t.occupiedBy) || null;
+		}
+		// If no table is available, skip spawning
+		if (!assignedTable) return;
+		// Reserve immediately; set real id after creating
+		assignedTable.occupiedBy = "temp";
+		const seatX = Math.floor(assignedTable.x + assignedTable.w / 2 - 15);
+		const seatY = Math.floor(assignedTable.y + assignedTable.h + 20 - 60);
 		const customer = {
 			id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.floor(rng()*1e6)}`,
-			x: -60,
-			y: 300 + Math.floor(rng() * 120) - 60,
-			speed: 0.5 + rng() * 0.4,
+			x: seatX,
+			y: seatY,
+			speed: (isVip ? 0.55 : 0.5) + rng() * 0.4,
 			state: "waiting",
-			patience,
+			patience: isVip ? patience + 2 : patience,
 			order: menu,
 			bumpTimer: 0,
+			vip: isVip,
+			tableId: null,
+			targetX: seatX,
+			targetY: seatY,
 		};
+		// Now that we have id, finalize table reservation and target
+		assignedTable.occupiedBy = customer.id;
+		customer.tableId = assignedTable.id;
 		state.customers.push(customer);
 		const ticket = makeTicket(customer.id, menu);
 		state.tickets.push(ticket);
-		log(`Ticket created: ${menu.name}`);
+		log(`${isVip?"VIP ":""}Ticket created: ${menu.name}`);
 	}
 
 	function tryPlaceTicketOnStation(ticket, station, empId = null, desiredSlotIndex = null) {
@@ -376,10 +368,29 @@
 			stepIndex: ticket.stepIndex,
 			empId: empId || null,
 		};
+		// track which employees helped on the ticket
+		if (empId) {
+			if (!ticket.helpers) ticket.helpers = [];
+			if (!ticket.helpers.includes(empId)) ticket.helpers.push(empId);
+		}
 		ticket.state = "in_station";
 		ticket.assignedTo = empId || ticket.assignedTo;
 		bleep(620, 0.06, "triangle");
 		return true;
+	}
+
+	function autoPlaceTicket(ticket) {
+		const step = ticket.recipe[ticket.stepIndex];
+		if (!step) return false;
+		const station = state.stations.find(s => s.key === step.station);
+		if (!station) return false;
+		const placed = tryPlaceTicketOnStation(ticket, station);
+		if (!placed) {
+			state.highlightStationKey = station.key;
+			bleep(300, 0.04, "sawtooth");
+			log(`Station ${station.label} is busy. Ticket queued.`);
+		}
+		return placed;
 	}
 
 	function completeJob(station, slot) {
@@ -389,11 +400,31 @@
 		if (!ticket) { slot.job = null; return; }
 		ticket.stepIndex += 1;
 		ticket.state = ticket.stepIndex >= ticket.recipe.length ? "ready" : "tray";
-		// Award base cash when order is prepared
+		// Award base cash when order is prepared (VIP 1.5x)
 		if (ticket.state === "ready") {
-			state.cash += ticket.item.price;
-			log(`Prepared ${ticket.item.name} (+$${ticket.item.price})`);
+			const cust = state.customers.find(c => c.id === ticket.customerId);
+			const mult = cust && cust.vip ? 1.5 : 1;
+			const baseEarn = Math.round(ticket.item.price * mult);
+			state.cash += baseEarn;
+			log(`Prepared ${ticket.item.name} (+$${baseEarn})`);
+			// Special perk: if the finishing employee has special stacks, bonus cash
+			if (slot.job && slot.job.empId) {
+				const finisher = state.employees.find(e => e.id === slot.job.empId);
+				if (finisher && finisher.specialStacks && finisher.specialStacks > 0) {
+					const bonus = 2 * finisher.specialStacks;
+					state.cash += bonus;
+					log(`${finisher.name}'s perk bonus +$${bonus}`);
+				}
+			}
 			updateHUD();
+		}
+		// Award XP to the employee who completed the step
+		if (job.empId) {
+			const emp = state.employees.find(e => e.id === job.empId);
+			if (emp) {
+				const reward = 5 + Math.floor((ticket.item.price || 8) / 4);
+				awardXp(emp, reward);
+			}
 		}
 		slot.job = null;
 		// free employee if was working
@@ -412,13 +443,36 @@
 		// payout (tips/combos) and rep
 		const tip = Math.max(0, Math.floor(customer.patience));
 		const comboBonus = state.combo >= 2 ? state.combo : 0;
-		state.cash += tip + comboBonus;
+		const base = ticket.item.price * (customer.vip ? 1.5 : 1);
+		const baseRounded = Math.round(base);
+		// Level-based tip bonus for AI-assisted orders (bigger for VIPs)
+		let highestHelperLevel = 0;
+		if (ticket.helpers && ticket.helpers.length) {
+			for (const id of ticket.helpers) {
+				const emp = state.employees.find(e => e.id === id);
+				if (emp) highestHelperLevel = Math.max(highestHelperLevel, emp.level || 1);
+			}
+		}
+		const perLevel = customer.vip ? 1.0 : 0.5; // bigger boost for VIPs
+		const aiTipBonus = highestHelperLevel > 1 ? Math.floor((highestHelperLevel - 1) * perLevel) : 0;
+		const total = baseRounded + tip + comboBonus + aiTipBonus;
+		state.cash += tip + comboBonus + aiTipBonus;
 		state.rep += 1 + state.repLevel + (state.combo >= 3 ? 1 : 0);
 		state.lastServeAt = performance.now();
 		state.combo = (state.lastServeAt - (state.lastServeAtPrev || 0) < 3000) ? state.combo + 1 : 1;
 		state.lastServeAtPrev = state.lastServeAt;
-		log(`Served ${ticket.item.name} (+$${tip} tip${comboBonus?` +$${comboBonus} combo`:``})`);
+		log(`Served ${customer.vip?"VIP ":""}${ticket.item.name} (+$${baseRounded} base, +$${tip} tip${comboBonus?` +$${comboBonus} combo`:''}${aiTipBonus?` +$${aiTipBonus} AI`:''})`);
 		state.tickets = state.tickets.filter(t => t.id !== ticket.id);
+		// spawn cash fx at customer position before removing
+		const rect = layout.customers.get(customer.id);
+		if (rect) {
+			state.fx.push({ type: 'cash', x: rect.x + rect.w/2, y: rect.y, text: `+$${total}`, life: 0, lifeMax: 900 });
+		}
+		// Free the table occupied by this customer
+		if (state.tables && state.tables.length) {
+			const table = state.tables.find(t => t.occupiedBy === customer.id);
+			if (table) table.occupiedBy = null;
+		}
 		// Immediately remove the customer after they are served
 		state.customers = state.customers.filter(c => c.id !== customer.id);
 		bleep(1040, 0.08, "square");
@@ -541,8 +595,17 @@
 					continue;
 				}
 				if (e.phase === "idle" && e.thinkCd <= 0) {
-					e.thinkCd = 300;
-					const ticket = state.tickets.find(t => t.state === "tray" && !t.assignedTo && t.recipe[t.stepIndex]?.station === e.station);
+					e.thinkCd = 150;
+					const q = aiCache.stationQueues.get(e.station) || [];
+					let ticket = null;
+					while (q.length && !ticket) {
+						const cand = q.shift();
+						if (!cand) break;
+						if (cand.state !== "tray" || cand.assignedTo) continue;
+						const step = cand.recipe[cand.stepIndex];
+						if (!step || step.station !== e.station) continue;
+						ticket = cand;
+					}
 					if (!ticket) continue;
 					// claim ticket then go to customer
 					ticket.state = "claimed";
@@ -555,22 +618,30 @@
 			}
 
 			if (e.role === "runner") {
-				// existing runner automation (no movement visual for now)
+				// runner uses cached ready deliveries
 				e.thinkCd -= dt;
 				if (e.thinkCd > 0) continue;
-				e.thinkCd = 300;
-				const ticket = state.tickets.find(t => t.state === "ready");
-				if (!ticket) continue;
-				const cust = state.customers.find(c => c.id === ticket.customerId && c.state === "waiting");
-				if (!cust) continue;
+				e.thinkCd = 150;
+				const choice = aiCache.readyDeliveries[0];
+				if (!choice) continue;
+				const ticket = choice.ticket;
+				const cust = choice.cust;
 				if (!e.carrying) {
 					e.carrying = { ticketId: ticket.id, eta: 300 / e.speed };
 					bleep(420, 0.05, "sine");
+					// remove from queue so other runners don't double-pick
+					aiCache.readyDeliveries.shift();
 				} else {
 					e.carrying.eta -= dt;
 					if (e.carrying.eta <= 0) {
 						const t = state.tickets.find(x => x.id === e.carrying.ticketId);
+						if (t) {
+							if (!t.helpers) t.helpers = [];
+							if (!t.helpers.includes(e.id)) t.helpers.push(e.id);
+						}
 						if (t && cust) deliverTicketToCustomer(t, cust);
+						// Award runner XP for successful delivery
+						awardXp(e, 8);
 						e.carrying = null;
 					}
 				}
@@ -596,9 +667,21 @@
 		for (const cust of state.customers) {
 			if (cust.bumpTimer && cust.bumpTimer > 0) cust.bumpTimer -= dt;
 			if (cust.state === "waiting") {
-				cust.x += cust.speed * dt * 0.05;
-				cust.patience -= dt / 1200; // slower decay for more forgiving pacing
+				// Move to table if assigned, otherwise continue along entry path
+				if (cust.tableId && cust.targetX != null && cust.targetY != null) {
+					const stepDist = cust.speed * dt * 0.05;
+					const moved = moveTowards({ x: cust.x, y: cust.y }, { x: cust.targetX, y: cust.targetY }, stepDist);
+					cust.x = moved.x; cust.y = moved.y;
+				} else {
+					cust.x += cust.speed * dt * 0.05;
+				}
+				cust.patience -= dt / 1200; // slower decay
 				if (cust.patience <= 0) {
+					// free table when leaving unhappy
+					if (cust.tableId && state.tables) {
+						const t = state.tables.find(tb => tb.id === cust.tableId);
+						if (t && t.occupiedBy === cust.id) t.occupiedBy = null;
+					}
 					cust.state = "leaving";
 					removeTicketForCustomer(cust.id);
 					state.rep = Math.max(0, state.rep - 2);
@@ -623,6 +706,7 @@
 		state.customers = state.customers.filter(c => c.state !== "gone");
 	}
 
+	// drawStations moved to src/render/draw.js
 	function drawStations() {
 		const baseY = canvas.height - 130;
 		const totalW = canvas.width - 40;
@@ -817,32 +901,30 @@
 		}
 	}
 
-	function draw() {
-		ctx.clearRect(0, 0, canvas.width, canvas.height);
-		// Background
-		ctx.fillStyle = "#11131b";
-		ctx.fillRect(0, 0, canvas.width, canvas.height);
-		// Stations and jobs
-		drawStations();
-		drawStationJobs();
-		// Customers
-		drawCustomers();
-		// Employees on top of customers
-		drawEmployees();
-		// Tickets
-		drawTickets();
-	}
+	// draw moved to src/render/draw.js
 
 	function update(dt) {
 		if (!state.running || state.paused) return;
 		state.elapsed += dt;
 		state.spawnTimer += dt;
+		// update fx
+		for (let i = state.fx.length - 1; i >= 0; i--) {
+			const fx = state.fx[i];
+			fx.life += dt;
+			if (fx.life >= fx.lifeMax) state.fx.splice(i, 1);
+		}
+		// rebuild AI cache periodically (~150ms)
+		const nowMs = performance.now();
+		if (nowMs - aiCache.lastBuildAt > 150) {
+			rebuildAiCache(nowMs);
+		}
 
-		// Start very slow and ramp up based on elapsed time and difficulty
-		const timeFactor = Math.min(1, state.elapsed / 60000); // up to 1 after a minute
-		const dynamicBase = state.baseSpawnMs * (1 - 0.4 * timeFactor); // faster within a day
-		const spawnEvery = Math.max(1000, dynamicBase - state.difficulty * 250);
-		state.maxWaitingCustomers = Math.min(12, 4 + Math.floor(state.difficulty * 1.5));
+		// Ramp up based on within-day time and much more for later days
+		const timeFactor = Math.min(1, state.elapsed / 60000);
+		const dynamicBase = state.baseSpawnMs * (1 - 0.4 * timeFactor);
+		const dayScale = 1 + 0.15 * Math.max(0, state.day - 1); // stronger spawn for later days
+		const spawnEvery = Math.max(600, dynamicBase / dayScale - state.difficulty * 250);
+		state.maxWaitingCustomers = Math.min(50, 6 + state.day * 2);
 		const waiting = state.customers.filter(c => c.state === "waiting").length;
 		if (state.spawnTimer > spawnEvery && waiting < state.maxWaitingCustomers) {
 			state.spawnTimer = 0;
@@ -865,16 +947,16 @@
 		try {
 			addBreadcrumb('loop', { dt });
 			update(dt);
-			draw();
+			renderAll(ctx, canvas, state, layout, rng, empSkinReady, EMP_SKIN_IMG);
 			if (state.gameOver) {
-				drawGameOver();
+				drawGameOver(ctx, canvas);
 			}
 		} catch (err) {
 			state.running = false;
 			state.paused = true;
 			console.error(err);
 			log(`Error: ${err?.message || err}`);
-			logCrashReport(err, { lastFrameDtMs: dt, phase: 'loop' });
+			logCrashReport(err, state, layout, ui, log, { lastFrameDtMs: dt, phase: 'loop' });
 		}
 		requestAnimationFrame(loop);
 	}
@@ -912,26 +994,30 @@
 		if (picked) {
 			const t = state.tickets.find(tk => tk.id === picked.id);
 			if (!t) return;
-			// Click-to-deliver for ready tickets
-			if (t.state === "ready") {
-				const cust = state.customers.find(c => c.id === t.customerId && c.state === "waiting");
-				if (cust) {
-					deliverTicketToCustomer(t, cust);
-					state.cash += 1;
-					log("Customer tipped +$1");
-					updateHUD();
+							// Click-to-deliver for ready tickets
+				if (t.state === "ready") {
+					const cust = state.customers.find(c => c.id === t.customerId && c.state === "waiting");
+					if (cust) {
+						const rect = layout.customers.get(cust.id);
+						if (rect) {
+							state.fx.push({ type: 'cash', x: rect.x + rect.w/2, y: rect.y - 14, text: "+$1", life: 0, lifeMax: 800 });
+						}
+						deliverTicketToCustomer(t, cust);
+					}
+					return;
 				}
-				return;
-			}
-			if (t.state !== "in_station") {
-				t.state = "dragging";
-				t._drag.x = m.x;
-				t._drag.y = m.y;
-				t._drag.offX = m.x - picked.rect.x;
-				t._drag.offY = m.y - picked.rect.y;
-				// highlight the station needed for this ticket's current step
-				const step = t.recipe[t.stepIndex];
-				state.highlightStationKey = step?.station || null;
+							if (t.state !== "in_station") {
+				const placed = autoPlaceTicket(t);
+				if (!placed) {
+					// fall back to drag if not placed
+					t.state = "dragging";
+					t._drag.x = m.x;
+					t._drag.y = m.y;
+					t._drag.offX = m.x - picked.rect.x;
+					t._drag.offY = m.y - picked.rect.y;
+					const step = t.recipe[t.stepIndex];
+					state.highlightStationKey = step?.station || null;
+				}
 			}
 		}
 	});
@@ -958,10 +1044,11 @@
 			if (t.state === "ready") {
 				const cust = state.customers.find(c => c.id === t.customerId && c.state === "waiting");
 				if (cust) {
+					const rect = layout.customers.get(cust.id);
+					if (rect) {
+						state.fx.push({ type: 'cash', x: rect.x + rect.w/2, y: rect.y - 14, text: "+$1", life: 0, lifeMax: 800 });
+					}
 					deliverTicketToCustomer(t, cust);
-					state.cash += 1;
-					log("Customer tipped +$1");
-					updateHUD();
 				}
 				return;
 			}
@@ -1080,6 +1167,7 @@
 		state.repLevel = 0;
 		state.employees = [];
 		createStations();
+		createDiningTables(); // Reset tables
 		resetDay();
 		updateHUD();
 		log("Game reset.");
@@ -1139,6 +1227,39 @@
 		ctx.restore();
 	}
 
+	const aiCache = {
+		lastBuildAt: 0,
+		stationQueues: new Map(), // stationKey -> ticket[] prioritized
+		readyDeliveries: [], // tickets ready with live customers
+	};
+
+	function rebuildAiCache(nowMs) {
+		aiCache.stationQueues.clear();
+		aiCache.readyDeliveries.length = 0;
+		// build station queues: tray tickets, not assigned, next step matches station
+		for (const st of state.stations) {
+			const list = state.tickets.filter(t => t.state === 'tray' && !t.assignedTo && t.recipe[t.stepIndex]?.station === st.key);
+			// prioritize by lowest patience of customer, then oldest ticket
+			list.sort((a, b) => {
+				const ca = state.customers.find(c => c.id === a.customerId);
+				const cb = state.customers.find(c => c.id === b.customerId);
+				const pa = ca ? ca.patience : 999;
+				const pb = cb ? cb.patience : 999;
+				if (pa !== pb) return pa - pb;
+				return a.createdAt - b.createdAt;
+			});
+			aiCache.stationQueues.set(st.key, list);
+		}
+		// ready deliveries - pick tickets ready with a waiting customer, prioritize by lowest patience
+		const ready = state.tickets.filter(t => t.state === 'ready');
+		for (const t of ready) {
+			const c = state.customers.find(x => x.id === t.customerId && x.state === 'waiting');
+			if (c) aiCache.readyDeliveries.push({ ticket: t, cust: c });
+		}
+		aiCache.readyDeliveries.sort((a, b) => a.cust.patience - b.cust.patience);
+		aiCache.lastBuildAt = nowMs;
+	}
+
 	// Init
 	// no starter employees; start with none
 	updateHUD();
@@ -1147,19 +1268,19 @@
 	window.addEventListener('error', (e) => {
 		try {
 			log(`Unhandled Error: ${e?.error?.message || e.message || e}`);
-			logCrashReport(e.error || e, { phase: 'window.error' });
+			logCrashReport(e.error || e, state, layout, ui, log, { phase: 'window.error' });
 		} catch {}
 	});
 	window.addEventListener('unhandledrejection', (e) => {
 		try {
 			const reason = e?.reason || new Error('unhandledrejection with unknown reason');
 			log(`Unhandled Rejection: ${reason?.message || reason}`);
-			logCrashReport(reason, { phase: 'unhandledrejection' });
+			logCrashReport(reason, state, layout, ui, log, { phase: 'unhandledrejection' });
 		} catch {}
 	});
 	// Mobile-only niceties
 	canvas.addEventListener('touchstart', () => {
-		try { if (_audio && _audio.state === 'suspended') { _audio.resume?.(); } } catch {}
+		try { resumeAudio(); } catch {}
 	});
 	document.addEventListener('gesturestart', (e) => { e.preventDefault(); }, { passive: false });
 	document.addEventListener('contextmenu', (e) => { if (e.target === canvas) e.preventDefault(); });
