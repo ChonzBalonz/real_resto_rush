@@ -1,3 +1,71 @@
+let cachedBg = null;
+let cachedBgW = 0;
+let cachedBgH = 0;
+
+function buildStaticBackground(canvas, state) {
+	const w = canvas.width, h = canvas.height;
+	if (!w || !h) return;
+	cachedBg = document.createElement('canvas');
+	cachedBg.width = w; cachedBg.height = h;
+	const g = cachedBg.getContext('2d');
+	// Base background
+	g.fillStyle = "#101218";
+	g.fillRect(0, 0, w, h);
+	const floorH = h - 130;
+	const grad = g.createLinearGradient(0, 0, 0, floorH);
+	grad.addColorStop(0, "#1a1f2b");
+	grad.addColorStop(1, "#131827");
+	g.fillStyle = grad;
+	g.fillRect(0, 0, w, floorH);
+	// Grid lines
+	g.strokeStyle = "rgba(255,255,255,0.04)";
+	g.lineWidth = 1;
+	const gridSize = 40;
+	for (let y = gridSize; y < floorH; y += gridSize) {
+		g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
+	}
+	for (let x = gridSize; x < w; x += gridSize) {
+		g.beginPath(); g.moveTo(x, 0); g.lineTo(x, floorH); g.stroke();
+	}
+	cachedBgW = w; cachedBgH = h;
+}
+
+function drawDiningLayout(ctx, canvas, state) {
+	// Rebuild cache if size changed
+	if (!cachedBg || cachedBgW !== canvas.width || cachedBgH !== canvas.height) {
+		buildStaticBackground(canvas, state);
+	}
+	if (cachedBg) {
+		ctx.drawImage(cachedBg, 0, 0);
+	} else {
+		// Fallback direct render (should rarely happen)
+		ctx.fillStyle = "#101218";
+		ctx.fillRect(0, 0, canvas.width, canvas.height);
+		const floorH = canvas.height - 130;
+		const grad = ctx.createLinearGradient(0, 0, 0, floorH);
+		grad.addColorStop(0, "#1a1f2b");
+		grad.addColorStop(1, "#131827");
+		ctx.fillStyle = grad;
+		ctx.fillRect(0, 0, canvas.width, floorH);
+	}
+	// Draw tables (including occupancy highlight) on top of cached floor
+	for (const t of (state.tables || [])) {
+		ctx.save();
+		ctx.fillStyle = "#3a2f45";
+		ctx.strokeStyle = "#2a2435";
+		ctx.lineWidth = 2;
+		ctx.fillRect(t.x, t.y, t.w, t.h);
+		ctx.strokeRect(t.x, t.y, t.w, t.h);
+		if (t.occupiedBy) {
+			ctx.globalAlpha = 0.08;
+			ctx.fillStyle = "#7bd88f";
+			ctx.fillRect(t.x - 4, t.y - 4, t.w + 8, t.h + 8);
+			ctx.globalAlpha = 1;
+		}
+		ctx.restore();
+	}
+}
+
 export function drawStations(ctx, canvas, state, layout) {
 	const baseY = canvas.height - 130;
 	const totalW = canvas.width - 40;
@@ -208,53 +276,6 @@ export function drawFx(ctx, state) {
 			ctx.fillText(fx.text, fx.x, y);
 			ctx.restore();
 		}
-	}
-}
-
-function drawDiningLayout(ctx, canvas, state) {
-	// Base background
-	ctx.fillStyle = "#101218";
-	ctx.fillRect(0, 0, canvas.width, canvas.height);
-	// Dining floor (top area), leave space for stations at bottom
-	const floorH = canvas.height - 130;
-	const grad = ctx.createLinearGradient(0, 0, 0, floorH);
-	grad.addColorStop(0, "#1a1f2b");
-	grad.addColorStop(1, "#131827");
-	ctx.fillStyle = grad;
-	ctx.fillRect(0, 0, canvas.width, floorH);
-	// Subtle grid lines to suggest tiles
-	ctx.strokeStyle = "rgba(255,255,255,0.04)";
-	ctx.lineWidth = 1;
-	const gridSize = 40;
-	for (let y = gridSize; y < floorH; y += gridSize) {
-		ctx.beginPath();
-		ctx.moveTo(0, y);
-		ctx.lineTo(canvas.width, y);
-		ctx.stroke();
-	}
-	for (let x = gridSize; x < canvas.width; x += gridSize) {
-		ctx.beginPath();
-		ctx.moveTo(x, 0);
-		ctx.lineTo(x, floorH);
-		ctx.stroke();
-	}
-	// Tables
-	for (const t of (state.tables || [])) {
-		// Table top
-		ctx.save();
-		ctx.fillStyle = "#3a2f45"; // muted table color
-		ctx.strokeStyle = "#2a2435";
-		ctx.lineWidth = 2;
-		ctx.fillRect(t.x, t.y, t.w, t.h);
-		ctx.strokeRect(t.x, t.y, t.w, t.h);
-		// If occupied, add a soft highlight
-		if (t.occupiedBy) {
-			ctx.globalAlpha = 0.08;
-			ctx.fillStyle = "#7bd88f";
-			ctx.fillRect(t.x - 4, t.y - 4, t.w + 8, t.h + 8);
-			ctx.globalAlpha = 1;
-		}
-		ctx.restore();
 	}
 }
 

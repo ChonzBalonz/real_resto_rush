@@ -10,6 +10,25 @@ import { renderAll } from "./src/render/draw.js";
 	const canvas = document.getElementById("game");
 	const ctx = canvas.getContext("2d");
 
+	// DPR-aware canvas sizing with dynamic cap for mobile performance
+	let renderScale = 1; // maps to effective DPR (<= device DPR)
+	function computeDesiredScale() {
+		const dpr = Math.min(window.devicePixelRatio || 1, 3);
+		if (window.innerWidth <= 430) return Math.min(dpr, 2);
+		return dpr;
+	}
+	function resizeCanvasToDisplaySize() {
+		const rect = canvas.getBoundingClientRect();
+		renderScale = computeDesiredScale();
+		const w = Math.max(1, Math.floor(rect.width * renderScale));
+		const h = Math.max(1, Math.floor(rect.height * renderScale));
+		if (canvas.width !== w || canvas.height !== h) {
+			canvas.width = w; canvas.height = h;
+		}
+	}
+	window.addEventListener('resize', resizeCanvasToDisplaySize);
+	resizeCanvasToDisplaySize();
+
 	// ui moved to src/ui/ui.js
 
 	// Crash diagnostics moved to src/diagnostics/crash.js
@@ -354,6 +373,8 @@ import { renderAll } from "./src/render/draw.js";
 		const ticket = makeTicket(customer.id, menu);
 		state.tickets.push(ticket);
 		log(`${isVip?"VIP ":""}Ticket created: ${menu.name}`);
+		// Haptic feedback on VIP arrival (mobile)
+		if (isVip && 'vibrate' in navigator && window.innerWidth <= 430) { try { navigator.vibrate(10); } catch {} }
 	}
 
 	function tryPlaceTicketOnStation(ticket, station, empId = null, desiredSlotIndex = null) {
@@ -476,6 +497,8 @@ import { renderAll } from "./src/render/draw.js";
 		// Immediately remove the customer after they are served
 		state.customers = state.customers.filter(c => c.id !== customer.id);
 		bleep(1040, 0.08, "square");
+		// Haptic feedback on successful delivery
+		if ('vibrate' in navigator && window.innerWidth <= 430) { try { navigator.vibrate(12); } catch {} }
 		updateHUD();
 		return true;
 	}
@@ -924,7 +947,9 @@ import { renderAll } from "./src/render/draw.js";
 		const dynamicBase = state.baseSpawnMs * (1 - 0.4 * timeFactor);
 		const dayScale = 1 + 0.15 * Math.max(0, state.day - 1); // stronger spawn for later days
 		const spawnEvery = Math.max(600, dynamicBase / dayScale - state.difficulty * 250);
-		state.maxWaitingCustomers = Math.min(50, 6 + state.day * 2);
+		// Tighter cap on very small screens to keep playability
+		const smallScreenCap = window.innerWidth <= 380 ? 18 : 50;
+		state.maxWaitingCustomers = Math.min(smallScreenCap, 6 + state.day * 2);
 		const waiting = state.customers.filter(c => c.state === "waiting").length;
 		if (state.spawnTimer > spawnEvery && waiting < state.maxWaitingCustomers) {
 			state.spawnTimer = 0;
@@ -947,7 +972,12 @@ import { renderAll } from "./src/render/draw.js";
 		try {
 			addBreadcrumb('loop', { dt });
 			update(dt);
-			renderAll(ctx, canvas, state, layout, rng, empSkinReady, EMP_SKIN_IMG);
+			// Simple frame skip under heavy load on mobile to keep input responsive
+			let skipRender = false;
+			if (window.innerWidth <= 430 && dt > 24) skipRender = (Math.random() < 0.33);
+			if (!skipRender) {
+				renderAll(ctx, canvas, state, layout, rng, empSkinReady, EMP_SKIN_IMG);
+			}
 			if (state.gameOver) {
 				drawGameOver(ctx, canvas);
 			}
@@ -1282,6 +1312,14 @@ import { renderAll } from "./src/render/draw.js";
 	canvas.addEventListener('touchstart', () => {
 		try { resumeAudio(); } catch {}
 	});
+	// Mobile menu toggle for sidebar
+	const sidebar = document.getElementById('sidebar');
+	const mobileToggle = document.getElementById('mobile-toggle');
+	if (sidebar && mobileToggle) {
+		mobileToggle.addEventListener('click', () => {
+			sidebar.classList.toggle('hidden');
+		});
+	}
 	document.addEventListener('gesturestart', (e) => { e.preventDefault(); }, { passive: false });
 	document.addEventListener('contextmenu', (e) => { if (e.target === canvas) e.preventDefault(); });
 })(); 
