@@ -1,11 +1,14 @@
 export function step(station, time) { return { station, time }; }
 
 export const MENU = [
-	{ name: "Soup", price: 8, recipe: [ step("cook", 3500) ] },
-	{ name: "Burger", price: 12, recipe: [ step("prep", 2500), step("cook", 4000) ] },
-	{ name: "Salad", price: 7, recipe: [ step("prep", 2200) ] },
-	{ name: "Pasta", price: 11, recipe: [ step("prep", 2500), step("cook", 3500) ] },
-	{ name: "Coffee", price: 4, recipe: [ step("drink", 1500) ] },
+	{ name: "Soup", emoji: "🍲", price: 8, recipe: [ step("cook", 3500) ] },
+	{ name: "Burger", emoji: "🍔", price: 12, recipe: [ step("prep", 2500), step("cook", 4000) ] },
+	{ name: "Salad", emoji: "🥗", price: 7, recipe: [ step("prep", 2200) ] },
+	{ name: "Pasta", emoji: "🍝", price: 11, recipe: [ step("prep", 2500), step("cook", 3500) ] },
+	{ name: "Coffee", emoji: "☕", price: 4, recipe: [ step("drink", 1500) ], drinkColor: "#6f4e37" },
+	{ name: "Coke", emoji: "🥤", price: 3, recipe: [ step("drink", 1200) ], drinkColor: "#111111" },
+	{ name: "Fanta Orange", emoji: "🥤", price: 3, recipe: [ step("drink", 1200) ], drinkColor: "#ff8c1a" },
+	{ name: "Gatorade Blue", emoji: "🥤", price: 3, recipe: [ step("drink", 1200) ], drinkColor: "#1e90ff" },
 ];
 
 export const STATION_TYPES = [

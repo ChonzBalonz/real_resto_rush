@@ -6,14 +6,14 @@
 }
 
 :root {
-	--bg: #0f0f14;
-	--panel: #17171f;
-	--accent: #7bd88f;
-	--accent-2: #6aa3ff;
-	--text: #e6e6ef;
-	--muted: #9aa0b4;
-	--danger: #ff6b6b;
-	--warn: #ffb86b;
+	--bg: #15120e;
+	--panel: #1e1712;
+	--accent: #e8b26c;
+	--accent-2: #e97777;
+	--text: #f3ead7;
+	--muted: #c9b8a6;
+	--danger: #d24b4b;
+	--warn: #f2b05e;
 }
 
 html, body {
@@ -21,21 +21,20 @@ html, body {
 	background: var(--bg);
 	color: var(--text);
 	font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji";
-	padding-top: env(safe-area-inset-top);
-	padding-bottom: env(safe-area-inset-bottom);
-	padding-left: env(safe-area-inset-left);
-	padding-right: env(safe-area-inset-right);
+	overflow: hidden;
 }
 
 #app {
 	display: grid;
 	grid-template-rows: auto 1fr auto;
 	height: 100dvh;
+	width: 100vw;
+	overflow: hidden;
 }
 
 .topbar, .bottombar {
 	background: var(--panel);
-	border-bottom: 1px solid #222330;
+	border-bottom: 1px solid #2a211b;
 	padding: 12px 16px;
 }
 
@@ -44,6 +43,9 @@ html, body {
 	align-items: center;
 	justify-content: space-between;
 	gap: 16px;
+	padding-top: calc(12px + env(safe-area-inset-top));
+	padding-left: calc(16px + env(safe-area-inset-left));
+	padding-right: calc(16px + env(safe-area-inset-right));
 }
 
 .topbar h1 {
@@ -67,7 +69,7 @@ html, body {
 	display: inline-block;
 	width: 140px;
 	height: 8px;
-	background: #30354e;
+	background: #3a2a1e;
 	border-radius: 6px;
 	margin-left: 6px;
 	vertical-align: middle;
@@ -85,14 +87,20 @@ html, body {
 	grid-template-columns: 1fr 320px;
 	gap: 16px;
 	padding: 16px;
+	min-height: 0;
+	overflow: hidden;
+	padding-left: calc(16px + env(safe-area-inset-left));
+	padding-right: calc(16px + env(safe-area-inset-right));
 }
 
 #game {
 	width: 100%;
+	max-height: 100%;
 	height: auto;
-	aspect-ratio: 16/9;
-	background: #0b0c10;
-	border: 1px solid #222330;
+	aspect-ratio: 16 / 9;
+	display: block;
+	background: #0f0d0b;
+	border: 1px solid #2a211b;
 	border-radius: 8px;
 	box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 10px 30px rgba(0,0,0,0.25);
 	touch-action: none;
@@ -100,13 +108,15 @@ html, body {
 
 .sidebar {
 	background: var(--panel);
-	border: 1px solid #222330;
+	border: 1px solid #2a211b;
 	border-radius: 8px;
 	padding: 12px;
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
 	height: fit-content;
+	max-height: 100%;
+	overflow: auto;
 }
 
 .sidebar.hidden {
@@ -121,8 +131,8 @@ html, body {
 
 .sidebar button {
 	appearance: none;
-	border: 1px solid #262738;
-	background: #1c1d2a;
+	border: 1px solid #3a2d22;
+	background: #2a231c;
 	color: var(--text);
 	padding: 10px 12px;
 	border-radius: 8px;
@@ -132,8 +142,8 @@ html, body {
 }
 
 .sidebar button:hover {
-	background: #212235;
-	border-color: #2b2d45;
+	background: #33281f;
+	border-color: #473326;
 }
 
 .sidebar button:active {
@@ -142,23 +152,23 @@ html, body {
 
 /* Affordability glow */
 @keyframes afford-glow {
-	0% { box-shadow: 0 0 0px rgba(123,216,143,0.0), 0 0 0px rgba(123,216,143,0.0); }
-	50% { box-shadow: 0 0 12px rgba(123,216,143,0.45), 0 0 2px rgba(123,216,143,0.5) inset; }
-	100% { box-shadow: 0 0 0px rgba(123,216,143,0.0), 0 0 0px rgba(123,216,143,0.0); }
+	0% { box-shadow: 0 0 0px rgba(232,178,108,0.0), 0 0 0px rgba(232,178,108,0.0); }
+	50% { box-shadow: 0 0 12px rgba(232,178,108,0.35), 0 0 2px rgba(232,178,108,0.4) inset; }
+	100% { box-shadow: 0 0 0px rgba(232,178,108,0.0), 0 0 0px rgba(232,178,108,0.0); }
 }
 .sidebar button.can-afford {
-	border-color: #3a5f47;
-	background: #22322a;
+	border-color: #7a5a2e;
+	background: #3a2d22;
 	animation: afford-glow 1.6s ease-in-out infinite;
 }
 
 .log {
 	margin-top: 8px;
 	height: 200px;
-	border: 1px solid #222330;
+	border: 1px solid #2a211b;
 	border-radius: 8px;
 	padding: 8px;
-	background: #121320;
+	background: #19130f;
 	font-size: 12px;
 	line-height: 1.4;
 	color: var(--muted);
@@ -167,7 +177,7 @@ html, body {
 
 .shop {
 	margin-top: 8px;
-	border-top: 1px solid #222330;
+	border-top: 1px solid #2a211b;
 	padding-top: 8px;
 }
 
@@ -190,10 +200,10 @@ html, body {
 }
 
 #emp-list li {
-	border: 1px solid #222330;
+	border: 1px solid #2a211b;
 	border-radius: 6px;
 	padding: 6px 8px;
-	background: #14182a;
+	background: #211811;
 	font-size: 12px;
 	color: var(--text);
 }
@@ -202,11 +212,14 @@ html, body {
 	display: flex;
 	gap: 8px;
 	align-items: center;
+	padding-left: calc(16px + env(safe-area-inset-left));
+	padding-right: calc(16px + env(safe-area-inset-right));
+	padding-bottom: calc(12px + env(safe-area-inset-bottom));
 }
 
 .bottombar button {
 	appearance: none;
-	border: 1px solid #262738;
+	border: 1px solid #3a2d22;
 	background: var(--accent-2);
 	color: #0b0c10;
 	padding: 10px 14px;
@@ -216,11 +229,11 @@ html, body {
 }
 
 .bottombar button#pause {
-	background: #b8c1ff;
+	background: #e8b26c;
 }
 
 .bottombar button#reset {
-	background: #2f334d;
+	background: #3a2d22;
 	color: var(--text);
 }
 
@@ -238,7 +251,7 @@ html, body {
 }
 
 body, #app, #game {
-	overscroll-behavior: contain;
+	overscroll-behavior: none;
 }
 
 /* iPhone 14 portrait optimizations (~390x844 CSS px at 3x) */
@@ -249,7 +262,7 @@ body, #app, #game {
 	.sidebar button { padding: 14px; font-size: 14px; }
 	#emp-list li { font-size: 13px; }
 	/* Keep canvas as big as possible above the fold */
-	#game { aspect-ratio: 9/16; }
+	#game { width: 100%; height: auto; max-height: 100%; aspect-ratio: 16 / 9; }
 	.bottombar { position: sticky; bottom: 0; padding-bottom: calc(env(safe-area-inset-bottom) + 8px); }
 	.mobile-toggle {
 		position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 16px);

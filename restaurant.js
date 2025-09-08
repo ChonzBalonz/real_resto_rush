@@ -1,6 +1,6 @@
 import { bleep, resumeAudio } from "./src/audio/sfx.js";
 import { MENU, step, STATION_TYPES, EMP_TYPES, VIP_SPAWN_CHANCE } from "./src/core/constants.js";
-import { ui, log, updateEmpList } from "./src/ui/ui.js";
+import { ui, log, updateEmpList, animateNumber } from "./src/ui/ui.js";
 import { addBreadcrumb, logCrashReport } from "./src/diagnostics/crash.js";
 import { renderAll } from "./src/render/draw.js";
 
@@ -22,11 +22,16 @@ import { renderAll } from "./src/render/draw.js";
 		renderScale = computeDesiredScale();
 		const w = Math.max(1, Math.floor(rect.width * renderScale));
 		const h = Math.max(1, Math.floor(rect.height * renderScale));
-		if (canvas.width !== w || canvas.height !== h) {
+		const sizeChanged = (canvas.width !== w || canvas.height !== h);
+		if (sizeChanged) {
 			canvas.width = w; canvas.height = h;
 		}
+		// Reflow dining layout when size/orientation changes
+		try { if (typeof createDiningTables === "function") createDiningTables(); } catch {}
 	}
 	window.addEventListener('resize', resizeCanvasToDisplaySize);
+	// Ensure orientation changes also trigger a reflow on mobile
+	window.addEventListener('orientationchange', () => { setTimeout(resizeCanvasToDisplaySize, 0); });
 	resizeCanvasToDisplaySize();
 
 	// ui moved to src/ui/ui.js
@@ -41,6 +46,26 @@ import { renderAll } from "./src/render/draw.js";
 	EMP_SKIN_IMG.src = "https://art.pixilart.com/a98f8556e678d95.png";
 	let empSkinReady = false;
 	EMP_SKIN_IMG.onload = () => { empSkinReady = true; };
+
+	// Customer skin GIF
+	const CUSTOMER_SKIN_IMG = new Image();
+	CUSTOMER_SKIN_IMG.crossOrigin = "anonymous";
+	CUSTOMER_SKIN_IMG.src = "customer_skins/monkey_customer.gif";
+	let custSkinReady = false;
+	CUSTOMER_SKIN_IMG.onload = () => { 
+		custSkinReady = true; 
+		try {
+			// Append offscreen so some browsers keep animating the GIF frames
+			CUSTOMER_SKIN_IMG.style.position = 'absolute';
+			CUSTOMER_SKIN_IMG.style.left = '-9999px';
+			CUSTOMER_SKIN_IMG.style.top = '-9999px';
+			CUSTOMER_SKIN_IMG.style.width = '1px';
+			CUSTOMER_SKIN_IMG.style.height = '1px';
+			CUSTOMER_SKIN_IMG.style.opacity = '0';
+			CUSTOMER_SKIN_IMG.setAttribute('aria-hidden', 'true');
+			if (!document.body.contains(CUSTOMER_SKIN_IMG)) document.body.appendChild(CUSTOMER_SKIN_IMG);
+		} catch {}
+	};
 
 	// Game state
 	const state = {
@@ -71,9 +96,21 @@ import { renderAll } from "./src/render/draw.js";
 		maxWaitingCustomers: 4,
 		fx: [],
 		tables: [], // New: dining tables
+		// Manager mode
+		managerMode: false,
+		managerEmpId: null,
+		managerAiCooldown: 0,
+		managerQuipCd: 0,
+		managerQuipsOn: true,
+		managerMinionCd: 0,
+		// Rush mode
+		rushActive: false,
+		rushTimer: 0,
+		rushCooldownMs: 8000,
 	};
 
 	const rng = mulberry32(state.seed);
+	const CUSTOMER_SPEED_MULT = 1.5;
 
 	// Simple persistence for highest reached day
 	const SAVE_KEY = "restaurant_rush_highest_day_v1";
@@ -122,6 +159,9 @@ import { renderAll } from "./src/render/draw.js";
 			} else {
 				log(`${emp.name} reached Lv.${emp.level}!`);
 			}
+			// Level-up FX and haptics
+			try { state.fx.push({ type: 'spark', x: emp.x || 0, y: emp.y || 0, life: 0, lifeMax: 900 }); } catch {}
+			if ('vibrate' in navigator && window.innerWidth <= 430) { try { navigator.vibrate(8); } catch {} }
 			updateEmpList(state.employees);
 		}
 	}
@@ -190,9 +230,9 @@ import { renderAll } from "./src/render/draw.js";
 	}
 
 	function updateHUD() {
-		ui.day.textContent = String(state.day);
-		ui.cash.textContent = String(state.cash);
-		ui.rep.textContent = String(state.rep);
+		try { animateNumber(ui.day, state.day); } catch { ui.day.textContent = String(state.day); }
+		try { animateNumber(ui.cash, state.cash); } catch { ui.cash.textContent = String(state.cash); }
+		try { animateNumber(ui.rep, state.rep); } catch { ui.rep.textContent = String(state.rep); }
 		if (ui.healthFill) {
 			const pct = Math.max(0, Math.min(1, state.health / state.healthMax));
 			ui.healthFill.style.width = `${pct * 100}%`;
@@ -228,6 +268,10 @@ import { renderAll } from "./src/render/draw.js";
 			}
 		});
 		updateEmpList(state.employees);
+		// Manager toggle label
+		if (ui.managerToggle) {
+			ui.managerToggle.textContent = `Manager Mode: ${state.managerMode ? 'On' : 'Off'}`;
+		}
 	}
 
 	// Menu and recipes moved to src/core/constants.js
@@ -250,31 +294,63 @@ import { renderAll } from "./src/render/draw.js";
 	// Create dining room tables (simple grid in top area of canvas)
 	function createDiningTables() {
 		const bottomMargin = 130; // station panel height
-		const floorH = canvas.height - bottomMargin;
-		const cols = 4;
-		const rows = 2;
-		const gapX = 40;
-		const gapY = 60;
-		const marginX = 40;
-		const marginY = 40;
-		const usableW = canvas.width - marginX * 2 - gapX * (cols - 1);
-		const usableH = floorH - marginY * 2 - gapY * (rows - 1);
-		const tableW = Math.max(90, Math.min(140, Math.floor(usableW / cols)));
-		const tableH = Math.max(50, Math.min(80, Math.floor(usableH / rows)));
-		const extraW = (canvas.width - marginX * 2) - (cols * tableW + (cols - 1) * gapX);
-		const xStart = marginX + Math.floor(extraW / 2);
-		const extraH = (floorH - marginY * 2) - (rows * tableH + (rows - 1) * gapY);
-		const yStart = marginY + Math.floor(extraH / 2);
-		const tables = [];
-		let id = 0;
-		for (let r = 0; r < rows; r++) {
-			for (let c = 0; c < cols; c++) {
-				const x = xStart + c * (tableW + gapX);
-				const y = yStart + r * (tableH + gapY);
-				tables.push({ id: `t${id++}`, x, y, w: tableW, h: tableH, occupiedBy: null });
+		const playTop = 20;
+		const playBottom = canvas.height - bottomMargin;
+		const playHeight = Math.max(1, playBottom - playTop);
+		const tableW = 120;
+		const tableH = 70;
+		const gapX = 80;
+		// Center the 3-table group horizontally
+		const groupW = tableW * 3 + gapX * 2;
+		const leftStart = Math.max(20, Math.floor((canvas.width - groupW) / 2));
+		// Center vertically within playable area, biased lower toward bottom
+		const chairHClamp = 12;
+		const centerY = Math.min(playBottom - tableH - chairHClamp - 12, Math.max(playTop, Math.floor(playTop + (playHeight - tableH) * 0.9)));
+		const computeChairsForTable = (t) => {
+			const chairW = 18, chairH = 12;
+			const bottomY = t.y + t.h + 8;
+			const topY = t.y - chairH - 8;
+			const leftX = t.x + 10;
+			const rightX = t.x + t.w - chairW - 10;
+			return [
+				{ id: `${t.id}-c0`, x: leftX, y: bottomY, w: chairW, h: chairH, occupiedBy: null },
+				{ id: `${t.id}-c1`, x: rightX, y: bottomY, w: chairW, h: chairH, occupiedBy: null },
+				{ id: `${t.id}-c2`, x: leftX, y: topY, w: chairW, h: chairH, occupiedBy: null },
+				{ id: `${t.id}-c3`, x: rightX, y: topY, w: chairW, h: chairH, occupiedBy: null },
+			];
+		};
+		// Precompute target positions
+		const positions = [
+			{ id: 't0', x: leftStart, y: centerY, w: tableW, h: tableH },
+			{ id: 't1', x: leftStart + (tableW + gapX), y: centerY, w: tableW, h: tableH },
+			{ id: 't2', x: leftStart + 2 * (tableW + gapX), y: centerY, w: tableW, h: tableH },
+		];
+		if (Array.isArray(state.tables) && state.tables.length === 3) {
+			for (let i = 0; i < 3; i++) {
+				const t = state.tables[i];
+				const pos = positions[i];
+				const prevChairs = Array.isArray(t.chairs) ? t.chairs : [];
+				// Apply new geometry, preserve id
+				t.x = pos.x; t.y = pos.y; t.w = pos.w; t.h = pos.h;
+				// Recompute chairs and merge occupiedBy by index
+				const newChairs = computeChairsForTable({ id: t.id || pos.id, x: t.x, y: t.y, w: t.w, h: t.h });
+				for (let ci = 0; ci < newChairs.length; ci++) {
+					const prev = prevChairs[ci];
+					if (prev && prev.occupiedBy) newChairs[ci].occupiedBy = prev.occupiedBy;
+				}
+				t.chairs = newChairs;
 			}
+		} else {
+			const tables = [];
+			let id = 0;
+			for (let i = 0; i < positions.length; i++) {
+				const p = positions[i];
+				const tt = { id: `t${id++}`, x: p.x, y: p.y, w: p.w, h: p.h, occupiedBy: null };
+				tt.chairs = computeChairsForTable(tt);
+				tables.push(tt);
+			}
+			state.tables = tables;
 		}
-		state.tables = tables;
 	}
 	createDiningTables();
 
@@ -308,7 +384,11 @@ import { renderAll } from "./src/render/draw.js";
 		recomputeEmpStats(emp);
 		state.employees.push(emp);
 		log(`Hired ${def.name}!`);
+		// Spawn small poof FX where they appear and haptic
+		try { state.fx.push({ type: 'poof', x: emp.x, y: emp.y, life: 0, lifeMax: 700 }); } catch {}
+		if ('vibrate' in navigator && window.innerWidth <= 430) { try { navigator.vibrate(10); } catch {} }
 		updateHUD();
+		return emp.id;
 	}
 
 	// updateEmpList moved to src/ui/ui.js
@@ -341,38 +421,53 @@ import { renderAll } from "./src/render/draw.js";
 		const patience = 9 + Math.floor(rng() * 5) - Math.min(2, state.repLevel);
 		const menu = randomMenuItem();
 		const isVip = rng() < VIP_SPAWN_CHANCE;
-		// Assign a free table if available
+		// Assign a free chair at any table if available
 		let assignedTable = null;
+		let assignedChair = null;
 		if (state.tables && state.tables.length) {
-			assignedTable = state.tables.find(t => !t.occupiedBy) || null;
+			for (const t of state.tables) {
+				const free = (t.chairs || []).find(ch => !ch.occupiedBy);
+				if (free) { assignedTable = t; assignedChair = free; break; }
+			}
 		}
-		// If no table is available, skip spawning
-		if (!assignedTable) return;
-		// Reserve immediately; set real id after creating
-		assignedTable.occupiedBy = "temp";
-		const seatX = Math.floor(assignedTable.x + assignedTable.w / 2 - 15);
-		const seatY = Math.floor(assignedTable.y + assignedTable.h + 20 - 60);
+		// If no chair is available, skip spawning
+		if (!assignedTable || !assignedChair) return;
+		// Reserve seat immediately; set real id after creating
+		assignedChair.occupiedBy = "temp";
+		const seatCenterX = assignedChair.x + assignedChair.w / 2;
+		const seatBaselineY = assignedChair.y + assignedChair.h + 2;
+		const seatX = Math.floor(seatCenterX - 17); // center under GIF (54px wide, left offset 10)
+		const seatY = Math.floor(seatBaselineY); // feet baseline sits on chair baseline
+		// Entry and register anchors
+		const entry = getDoorAnchor('right');
+		const reg = getRegisterAnchor();
 		const customer = {
 			id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.floor(rng()*1e6)}`,
-			x: seatX,
-			y: seatY,
+			x: entry.x,
+			y: entry.y,
 			speed: (isVip ? 0.55 : 0.5) + rng() * 0.4,
-			state: "waiting",
+			state: "queuing", // queuing -> ordering -> waiting
 			patience: isVip ? patience + 2 : patience,
 			order: menu,
 			bumpTimer: 0,
 			vip: isVip,
 			tableId: null,
-			targetX: seatX,
-			targetY: seatY,
+			chairId: null,
+			targetX: reg.x,
+			targetY: reg.y,
+			seatTargetX: seatX,
+			seatTargetY: seatY,
+			sitProgress: 0,
+			orderTimer: 0,
+			_anim: { t: 0, phase: Math.floor(rng() * 1000) },
+			_moving: false,
 		};
-		// Now that we have id, finalize table reservation and target
-		assignedTable.occupiedBy = customer.id;
+		// Now that we have id, finalize seat reservation and target
 		customer.tableId = assignedTable.id;
+		customer.chairId = assignedChair.id;
+		assignedChair.occupiedBy = customer.id;
 		state.customers.push(customer);
-		const ticket = makeTicket(customer.id, menu);
-		state.tickets.push(ticket);
-		log(`${isVip?"VIP ":""}Ticket created: ${menu.name}`);
+		log(`${isVip?"VIP ":""}Customer arrived`);
 		// Haptic feedback on VIP arrival (mobile)
 		if (isVip && 'vibrate' in navigator && window.innerWidth <= 430) { try { navigator.vibrate(10); } catch {} }
 	}
@@ -461,7 +556,7 @@ import { renderAll } from "./src/render/draw.js";
 
 	function deliverTicketToCustomer(ticket, customer) {
 		if (ticket.state !== "ready" || customer.id !== ticket.customerId) return false;
-		// payout (tips/combos) and rep
+		// compute payout (tips/combos) and apply rep; defer cash until register
 		const tip = Math.max(0, Math.floor(customer.patience));
 		const comboBonus = state.combo >= 2 ? state.combo : 0;
 		const base = ticket.item.price * (customer.vip ? 1.5 : 1);
@@ -477,25 +572,32 @@ import { renderAll } from "./src/render/draw.js";
 		const perLevel = customer.vip ? 1.0 : 0.5; // bigger boost for VIPs
 		const aiTipBonus = highestHelperLevel > 1 ? Math.floor((highestHelperLevel - 1) * perLevel) : 0;
 		const total = baseRounded + tip + comboBonus + aiTipBonus;
-		state.cash += tip + comboBonus + aiTipBonus;
+		// cash added at register during payment
 		state.rep += 1 + state.repLevel + (state.combo >= 3 ? 1 : 0);
 		state.lastServeAt = performance.now();
 		state.combo = (state.lastServeAt - (state.lastServeAtPrev || 0) < 3000) ? state.combo + 1 : 1;
 		state.lastServeAtPrev = state.lastServeAt;
 		log(`Served ${customer.vip?"VIP ":""}${ticket.item.name} (+$${baseRounded} base, +$${tip} tip${comboBonus?` +$${comboBonus} combo`:''}${aiTipBonus?` +$${aiTipBonus} AI`:''})`);
 		state.tickets = state.tickets.filter(t => t.id !== ticket.id);
-		// spawn cash fx at customer position before removing
-		const rect = layout.customers.get(customer.id);
-		if (rect) {
-			state.fx.push({ type: 'cash', x: rect.x + rect.w/2, y: rect.y, text: `+$${total}`, life: 0, lifeMax: 900 });
+		// attach payment info to customer and route to register
+		const custRef2 = state.customers.find(c => c.id === customer.id);
+		if (custRef2) {
+			custRef2._due = total;
+			custRef2.state = "to_register_pay";
+			const reg = getRegisterAnchor();
+			custRef2.targetX = reg.x; custRef2.targetY = reg.y;
 		}
-		// Free the table occupied by this customer
+		// Free the seat occupied by this customer
 		if (state.tables && state.tables.length) {
-			const table = state.tables.find(t => t.occupiedBy === customer.id);
-			if (table) table.occupiedBy = null;
+			for (const t of state.tables) {
+				for (const ch of (t.chairs || [])) {
+					if (ch.occupiedBy === customer.id) { ch.occupiedBy = null; break; }
+				}
+			}
 		}
-		// Immediately remove the customer after they are served
-		state.customers = state.customers.filter(c => c.id !== customer.id);
+		// Mark customer as served so they walk to the exit door
+		const custRef = state.customers.find(c => c.id === customer.id);
+		if (custRef) { custRef.state = "served"; }
 		bleep(1040, 0.08, "square");
 		// Haptic feedback on successful delivery
 		if ('vibrate' in navigator && window.innerWidth <= 430) { try { navigator.vibrate(12); } catch {} }
@@ -549,6 +651,47 @@ import { renderAll } from "./src/render/draw.js";
 		if (!rect) return null;
 		return { x: rect.x + 12, y: rect.y + rect.h - 10 };
 	}
+	
+	function getDoorAnchor(side) {
+		// Map-based doors: define door positions in image pixels, then map to canvas via _mapDraw
+		const md = state._mapDraw;
+		if (md) {
+			// TODO: adjust these image-space positions to match your map doors
+			const imgDoorLeft = { x: 60, y: md.ih - 80 }; // example: near bottom-left
+			const imgDoorRight = { x: md.iw - 60, y: md.ih - 80 }; // example: near bottom-right
+			const p = (side === 'left') ? imgDoorLeft : imgDoorRight;
+			const x = md.dx + p.x * md.scale;
+			const y = md.dy + p.y * md.scale;
+			return { x, y };
+		}
+		// Fallback to centered bottom entry/exit if map transform missing
+		const y = canvas.height - 24;
+		const x = side === 'left' ? 32 : canvas.width - 32;
+		return { x, y };
+	}
+	
+	function getRegisterAnchor() {
+		const reg = layout.register;
+		if (!reg) return { x: canvas.width / 2, y: 30 };
+		return { x: reg.x + reg.w / 2, y: reg.y + reg.h + 6 };
+	}
+
+	function generateInsult(orderName) {
+		const item = (orderName || "food");
+		const lines = [
+			`This ${item} is mid, not gonna lie.`,
+			`${item} looking like DLC content.`,
+			`Low-key thought ${item} would slap harder.`,
+			`This ${item} is giving cafeteria vibes.`,
+			`Who microwaved my ${item}?`,
+			`${item} said "I'm him" but it's not him.`,
+			`${item}? Real ones would've made this hit different.`,
+			`High key this ${item} needs a patch.`,
+			`This ${item} fell off, no cap.`,
+			`Why does this ${item} taste like side quest rewards?`,
+		];
+		return lines[Math.floor(rng() * lines.length)];
+	}
 
 	function moveTowards(pos, target, maxDist) {
 		const dx = target.x - pos.x;
@@ -562,9 +705,19 @@ import { renderAll } from "./src/render/draw.js";
 
 	function thinkEmployees(dt) {
 		for (const e of state.employees) {
+			// lifetime for minions
+			if (e.isMinion) {
+				e.lifeMs -= dt;
+				if (e.lifeMs <= 0) { e._despawn = true; continue; }
+			}
 			e.thinkCd -= dt;
-			if (e.role === "station") {
+			const isManager = (state.managerEmpId && e.id === state.managerEmpId);
+			const managerWorking = isManager && shouldManagerWork();
+			const minionBoss = !!e.isMinion;
+			// Station-like behavior (real station, manager when alone, or minion boss anywhere)
+			if (e.role === "station" || managerWorking || minionBoss) {
 				// handle movement phases
+				const activeStationKey = e.role === 'station' ? e.station : (e._mgrStation || null);
 				if (e.phase === "toCustomer" && e.task) {
 					const anchor = getCustomerAnchor(e.task.customerId);
 					if (anchor) {
@@ -581,13 +734,14 @@ import { renderAll } from "./src/render/draw.js";
 					continue;
 				}
 				if (e.phase === "toStation" && e.task) {
-					const home = getStationAnchor(e.station);
+					const targetKey = e.role === 'station' ? e.station : (e._mgrStation || e.station);
+					const home = getStationAnchor(targetKey);
 					const stepDist = 0.25 * dt * (0.9 + 0.2 * e.speed);
 					const moved = moveTowards({ x: e.x, y: e.y }, home, stepDist);
 					e.x = moved.x; e.y = moved.y;
 					if (moved.arrived) {
 						// try to start job now
-						const station = state.stations.find(s => s.key === e.station);
+						const station = state.stations.find(s => s.key === targetKey);
 						const t = state.tickets.find(tk => tk.id === e.task.ticketId);
 						if (!station || !t || t.state !== "claimed") {
 							e.phase = "idle";
@@ -595,7 +749,7 @@ import { renderAll } from "./src/render/draw.js";
 							continue;
 						}
 						const step = t.recipe ? t.recipe[t.stepIndex] : null;
-						if (!step || step.station !== e.station) {
+						if (!step || step.station !== station.key) {
 							if (t.assignedTo === e.id) t.assignedTo = null;
 							t.state = t.stepIndex >= (t.recipe?.length || 0) ? "ready" : "tray";
 							e.phase = "idle";
@@ -606,11 +760,11 @@ import { renderAll } from "./src/render/draw.js";
 						if (slotIndex !== -1) {
 							const placed = tryPlaceTicketOnStation(t, station, e.id, slotIndex);
 							if (placed) {
-								// reduce time based on employee speed
+								// reduce time based on employee speed (minions very fast)
 								const slot = station.slots[slotIndex];
 								const jobStep = t.recipe[t.stepIndex] || step;
 								const baseTime = jobStep?.time ?? 1500;
-								slot.job.remaining = Math.max(200, baseTime / e.speed);
+								slot.job.remaining = Math.max(150, baseTime / (e.speed * 1.4));
 								e.phase = "working";
 							}
 						}
@@ -618,57 +772,81 @@ import { renderAll } from "./src/render/draw.js";
 					continue;
 				}
 				if (e.phase === "idle" && e.thinkCd <= 0) {
-					e.thinkCd = 150;
-					const q = aiCache.stationQueues.get(e.station) || [];
+					e.thinkCd = 120;
 					let ticket = null;
-					while (q.length && !ticket) {
-						const cand = q.shift();
-						if (!cand) break;
-						if (cand.state !== "tray" || cand.assignedTo) continue;
-						const step = cand.recipe[cand.stepIndex];
-						if (!step || step.station !== e.station) continue;
-						ticket = cand;
+					let pickStationKey = activeStationKey;
+					if (e.role === 'station') {
+						const q = aiCache.stationQueues.get(e.station) || [];
+						while (q.length && !ticket) {
+							const cand = q.shift();
+							if (!cand) break;
+							if (cand.state !== "tray" || cand.assignedTo) continue;
+							const step = cand.recipe[cand.stepIndex];
+							if (!step || step.station !== e.station) continue;
+							ticket = cand;
+						}
+					} else {
+						// manager/minion picks best across all stations
+						let best = null, bestScore = Infinity;
+						for (const [key, list] of aiCache.stationQueues.entries()) {
+							if (!list || !list.length) continue;
+							const cand = list[0];
+							const cust = state.customers.find(c => c.id === cand.customerId);
+							const patience = cust ? cust.patience : 999;
+							const created = cand.createdAt || 0;
+							const priceBias = cand.item?.price || 0;
+							const score = (patience * 10) + (created * 0.0001) - priceBias;
+							if (score < bestScore) { bestScore = score; best = { ticket: cand, stationKey: key }; }
+						}
+						if (best) { ticket = best.ticket; pickStationKey = best.stationKey; }
 					}
 					if (!ticket) continue;
 					// claim ticket then go to customer
 					ticket.state = "claimed";
 					ticket.assignedTo = e.id;
 					e.task = { ticketId: ticket.id, customerId: ticket.customerId };
+					if (e.role !== 'station') e._mgrStation = pickStationKey;
 					e.phase = "toCustomer";
 					bleep(520, 0.05, "triangle");
 					continue;
 				}
 			}
-
+			// Runner behavior (includes minions). Manager delivers only when alone.
+			if (e.role === "runner" && !e.isMinion) {
+				if (isManager && !managerWorking) {
+					// manager stands down when staff exist
+					continue;
+				}
+			}
 			if (e.role === "runner") {
 				// runner uses cached ready deliveries
 				e.thinkCd -= dt;
 				if (e.thinkCd > 0) continue;
-				e.thinkCd = 150;
+				e.thinkCd = 120;
 				const choice = aiCache.readyDeliveries[0];
 				if (!choice) continue;
 				const ticket = choice.ticket;
 				const cust = choice.cust;
 				if (!e.carrying) {
-					e.carrying = { ticketId: ticket.id, eta: 300 / e.speed };
+					e.carrying = { ticketId: ticket.id, eta: (e.isMinion ? 180 : 300) / e.speed };
 					bleep(420, 0.05, "sine");
-					// remove from queue so other runners don't double-pick
-					aiCache.readyDeliveries.shift();
-				} else {
+					continue;
+				}
+				if (e.carrying) {
 					e.carrying.eta -= dt;
 					if (e.carrying.eta <= 0) {
-						const t = state.tickets.find(x => x.id === e.carrying.ticketId);
-						if (t) {
-							if (!t.helpers) t.helpers = [];
-							if (!t.helpers.includes(e.id)) t.helpers.push(e.id);
-						}
-						if (t && cust) deliverTicketToCustomer(t, cust);
-						// Award runner XP for successful delivery
-						awardXp(e, 8);
+						const t = state.tickets.find(tt => tt.id === e.carrying.ticketId) || ticket;
+						if (!t) { e.carrying = null; continue; }
+						deliverTicketToCustomer(t, cust);
 						e.carrying = null;
 					}
 				}
+				continue;
 			}
+		}
+		// cleanup expired minions
+		if (state.employees.some(e => e._despawn)) {
+			state.employees = state.employees.filter(e => !e._despawn);
 		}
 	}
 
@@ -688,22 +866,73 @@ import { renderAll } from "./src/render/draw.js";
 
 	function updateCustomers(dt) {
 		for (const cust of state.customers) {
+			// advance animation time
+			if (cust._anim) cust._anim.t += dt;
 			if (cust.bumpTimer && cust.bumpTimer > 0) cust.bumpTimer -= dt;
+			// chat timers
+			if (!cust._chat) {
+				cust._chatCd = (cust._chatCd ?? (6000 + Math.floor(rng() * 6000))) - dt;
+				if (cust._chatCd <= 0 && cust.state === "waiting") {
+					if (rng() < 0.35) {
+						const txt = generateInsult(cust.order?.name);
+						cust._chat = { text: txt, life: 0, lifeMax: 2400 };
+					}
+					cust._chatCd = 9000 + Math.floor(rng() * 7000);
+				}
+			} else {
+				cust._chat.life += dt;
+				if (cust._chat.life >= cust._chat.lifeMax) cust._chat = null;
+			}
+
+			if (cust.state === "queuing") {
+				const anchor = getRegisterAnchor();
+				const stepDist = cust.speed * dt * 0.05 * CUSTOMER_SPEED_MULT;
+				const moved = moveTowards({ x: cust.x, y: cust.y }, anchor, stepDist);
+				cust.x = moved.x; cust.y = moved.y;
+				cust._moving = !moved.arrived;
+				if (moved.arrived) {
+					cust.state = "ordering";
+					cust.orderTimer = (1000 + Math.floor(rng() * 800)) / CUSTOMER_SPEED_MULT;
+				}
+			}
+			if (cust.state === "ordering") {
+				cust._moving = false;
+				cust.orderTimer -= dt;
+				if (cust.orderTimer <= 0) {
+					// Create ticket now at register
+					const ticket = makeTicket(cust.id, cust.order);
+					state.tickets.push(ticket);
+					log(`Ticket created: ${cust.order.name}`);
+					// Now head to seat
+					cust.state = "waiting";
+					cust.targetX = cust.seatTargetX;
+					cust.targetY = cust.seatTargetY;
+					cust.sitProgress = 0;
+				}
+			}
 			if (cust.state === "waiting") {
-				// Move to table if assigned, otherwise continue along entry path
-				if (cust.tableId && cust.targetX != null && cust.targetY != null) {
-					const stepDist = cust.speed * dt * 0.05;
+				// Move to chair if assigned
+				if (cust.targetX != null && cust.targetY != null) {
+					const stepDist = cust.speed * dt * 0.05 * CUSTOMER_SPEED_MULT;
 					const moved = moveTowards({ x: cust.x, y: cust.y }, { x: cust.targetX, y: cust.targetY }, stepDist);
 					cust.x = moved.x; cust.y = moved.y;
+					cust._moving = !moved.arrived;
+					if (moved.arrived) {
+						cust.sitProgress = Math.min(1, (cust.sitProgress || 0) + dt / 400);
+					}
 				} else {
-					cust.x += cust.speed * dt * 0.05;
+					cust.x += cust.speed * dt * 0.05 * CUSTOMER_SPEED_MULT;
+					cust._moving = true;
 				}
 				cust.patience -= dt / 1200; // slower decay
 				if (cust.patience <= 0) {
-					// free table when leaving unhappy
-					if (cust.tableId && state.tables) {
-						const t = state.tables.find(tb => tb.id === cust.tableId);
-						if (t && t.occupiedBy === cust.id) t.occupiedBy = null;
+					// free seat when leaving unhappy
+					if (state.tables) {
+						for (const t of state.tables) {
+							for (const ch of (t.chairs || [])) {
+								if (ch.occupiedBy === cust.id) { ch.occupiedBy = null; break; }
+							}
+						}
 					}
 					cust.state = "leaving";
 					removeTicketForCustomer(cust.id);
@@ -718,12 +947,49 @@ import { renderAll } from "./src/render/draw.js";
 				}
 			}
 			if (cust.state === "served") {
-				cust.x += 0.3 * dt * 0.05;
-				if (cust.x > canvas.width + 50) cust.state = "gone";
+				const anchor = getDoorAnchor('right');
+				const stepDist = cust.speed * dt * 0.05 * CUSTOMER_SPEED_MULT;
+				const moved = moveTowards({ x: cust.x, y: cust.y }, anchor, stepDist);
+				cust.x = moved.x; cust.y = moved.y;
+				cust._moving = true;
+				if (moved.arrived) cust.state = "gone";
 			}
 			if (cust.state === "leaving") {
-				cust.x -= 0.4 * dt * 0.05;
-				if (cust.x < -60) cust.state = "gone";
+				const anchor = getDoorAnchor('left');
+				const stepDist = cust.speed * dt * 0.05 * CUSTOMER_SPEED_MULT;
+				const moved = moveTowards({ x: cust.x, y: cust.y }, anchor, stepDist);
+				cust.x = moved.x; cust.y = moved.y;
+				cust._moving = true;
+				if (moved.arrived) cust.state = "gone";
+			}
+			if (cust.state === "to_register_pay") {
+				const anchor = getRegisterAnchor();
+				const stepDist = cust.speed * dt * 0.05 * CUSTOMER_SPEED_MULT;
+				const moved = moveTowards({ x: cust.x, y: cust.y }, anchor, stepDist);
+				cust.x = moved.x; cust.y = moved.y;
+				cust._moving = true;
+				if (moved.arrived) {
+					cust.state = "paying";
+					cust.payTimer = (700 + Math.floor(rng() * 600)) / CUSTOMER_SPEED_MULT;
+				}
+			}
+			if (cust.state === "paying") {
+				cust._moving = false;
+				cust.payTimer -= dt;
+				if (cust.payTimer <= 0) {
+					const due = Math.max(0, Math.floor(cust._due || 0));
+					if (due > 0) {
+						state.cash += due;
+						const reg = layout.register;
+						if (reg) {
+							state.fx.push({ type: 'cash', x: reg.x + reg.w/2, y: reg.y + 8, text: `+$${due}`, life: 0, lifeMax: 900 });
+						}
+						if ('vibrate' in navigator && window.innerWidth <= 430) { try { navigator.vibrate(8); } catch {} }
+						updateHUD();
+					}
+					cust._due = 0;
+					cust.state = "served"; // now walk to exit
+				}
 			}
 		}
 		state.customers = state.customers.filter(c => c.state !== "gone");
@@ -941,12 +1207,56 @@ import { renderAll } from "./src/render/draw.js";
 		if (nowMs - aiCache.lastBuildAt > 150) {
 			rebuildAiCache(nowMs);
 		}
-
-		// Ramp up based on within-day time and much more for later days
+		// Manager work & minions
+		if (state.managerMode) {
+			ensureManagerSpawned();
+			// Quips occasionally
+			if (state.managerQuipsOn) {
+				state.managerQuipCd -= dt;
+				if (state.managerQuipCd <= 0) {
+					const me = state.employees.find(e => e.id === state.managerEmpId);
+					if (me) {
+						state.fx.push({ type: 'speech', x: me.x, y: me.y - 60, text: randomManagerQuip(), life: 0, lifeMax: 2200 });
+					}
+					state.managerQuipCd = 7000 + Math.floor(rng() * 6000);
+				}
+			}
+			// Minions when staff exist
+			const mgrShouldWork = shouldManagerWork();
+			if (!mgrShouldWork) {
+				state.managerMinionCd -= dt;
+				if (state.managerMinionCd <= 0 && aiCache.readyDeliveries.length > 0) {
+					spawnMinion();
+					state.managerMinionCd = 7000 + Math.floor(rng() * 5000);
+				}
+			}
+		}
+		// Rush mode random trigger and timer
+		if (!state.rushActive) {
+			state.rushCooldownMs = Math.max(0, state.rushCooldownMs - dt);
+			if (state.rushCooldownMs <= 0) {
+				// small per-frame chance scaled by dt
+				if (rng() < 0.0004 * (dt)) {
+					state.rushActive = true;
+					state.rushTimer = 14000 + Math.floor(rng() * 6000);
+					state.rushCooldownMs = 20000; // cooldown until next chance after it ends
+					log('RUSH MODE!');
+					bleep(1200, 0.12, 'square');
+				}
+			}
+		} else {
+			state.rushTimer -= dt;
+			if (state.rushTimer <= 0) {
+				state.rushActive = false;
+				log('Rush over.');
+			}
+		}
+		// Ramp up based on within-day time...
 		const timeFactor = Math.min(1, state.elapsed / 60000);
 		const dynamicBase = state.baseSpawnMs * (1 - 0.4 * timeFactor);
 		const dayScale = 1 + 0.15 * Math.max(0, state.day - 1); // stronger spawn for later days
-		const spawnEvery = Math.max(600, dynamicBase / dayScale - state.difficulty * 250);
+		let spawnEvery = Math.max(600, dynamicBase / dayScale - state.difficulty * 250);
+		if (state.rushActive) spawnEvery = Math.max(350, spawnEvery / 1.8);
 		// Tighter cap on very small screens to keep playability
 		const smallScreenCap = window.innerWidth <= 380 ? 18 : 50;
 		state.maxWaitingCustomers = Math.min(smallScreenCap, 6 + state.day * 2);
@@ -955,11 +1265,9 @@ import { renderAll } from "./src/render/draw.js";
 			state.spawnTimer = 0;
 			spawnCustomer();
 		}
-
 		thinkEmployees(dt);
 		cook(dt);
 		updateCustomers(dt);
-
 		if (state.elapsed >= state.dailyTimeMs) {
 			endDay();
 		}
@@ -976,7 +1284,7 @@ import { renderAll } from "./src/render/draw.js";
 			let skipRender = false;
 			if (window.innerWidth <= 430 && dt > 24) skipRender = (Math.random() < 0.33);
 			if (!skipRender) {
-				renderAll(ctx, canvas, state, layout, rng, empSkinReady, EMP_SKIN_IMG);
+				renderAll(ctx, canvas, state, layout, rng, empSkinReady, EMP_SKIN_IMG, custSkinReady, CUSTOMER_SKIN_IMG);
 			}
 			if (state.gameOver) {
 				drawGameOver(ctx, canvas);
@@ -1131,6 +1439,35 @@ import { renderAll } from "./src/render/draw.js";
 		}
 		state.highlightStationKey = null;
 	}, { passive: false });
+	// Mirror touchend behavior for touchcancel
+	canvas.addEventListener("touchcancel", (e) => {
+		mouseDown = false;
+		e.preventDefault();
+		const m = getTouch(e) || { x: 0, y: 0 };
+		addBreadcrumb('input', { type: 'touchcancel', x: Math.round(m.x), y: Math.round(m.y) });
+		const t = state.tickets.find(tk => tk.state === "dragging");
+		if (!t) { state.highlightStationKey = null; return; }
+		let dropped = false;
+		for (const [key, rect] of layout.stations) {
+			if (m.x >= rect.x && m.x <= rect.x + rect.w && m.y >= rect.y && m.y <= rect.y + rect.h) {
+				const station = state.stations.find(s => s.key === key);
+				if (tryPlaceTicketOnStation(t, station)) { dropped = true; break; }
+			}
+		}
+		if (!dropped) {
+			for (const [cid, rect] of layout.customers) {
+				if (m.x >= rect.x && m.x <= rect.x + rect.w && m.y >= rect.y && m.y <= rect.y + rect.h) {
+					const cust = state.customers.find(c => c.id === cid);
+					if (deliverTicketToCustomer(t, cust)) { dropped = true; break; }
+				}
+			}
+		}
+		if (!dropped) {
+			bleep(220, 0.06, "sawtooth");
+			t.state = t.stepIndex >= t.recipe.length ? "ready" : "tray";
+		}
+		state.highlightStationKey = null;
+	}, { passive: false });
 	canvas.addEventListener("mousemove", (e) => {
 		if (!mouseDown) return;
 		const m = getMouse(e);
@@ -1193,11 +1530,17 @@ import { renderAll } from "./src/render/draw.js";
 		state.capacityLevel = 0;
 		state.repLevel = 0;
 		state.employees = [];
+		state.managerEmpId = null;
+		state.managerMinionCd = 0;
+		state.rushActive = false;
+		state.rushTimer = 0;
+		state.rushCooldownMs = 8000;
 		createStations();
 		createDiningTables(); // Reset tables
 		resetDay();
 		updateHUD();
 		log("Game reset.");
+		if (state.managerMode) ensureManagerSpawned();
 	});
 
 	ui.uSpeed.addEventListener("click", () => {
@@ -1205,6 +1548,8 @@ import { renderAll } from "./src/render/draw.js";
 		if (state.cash < cost) { log(`Need $${cost} for Faster Cook.`); return; }
 		state.cash -= cost;
 		state.cookSpeedLevel += 1;
+		try { state.fx.push({ type: 'spark', x: canvas.width/2, y: canvas.height - 80, life: 0, lifeMax: 700 }); } catch {}
+		if ('vibrate' in navigator && window.innerWidth <= 430) { try { navigator.vibrate(8); } catch {} }
 		updateHUD();
 		log(`Station speed upgraded to Lv.${state.cookSpeedLevel}`);
 	});
@@ -1217,6 +1562,8 @@ import { renderAll } from "./src/render/draw.js";
 		for (const st of state.stations) {
 			st.slots.push({ job: null });
 		}
+		try { state.fx.push({ type: 'spark', x: canvas.width/2, y: canvas.height - 80, life: 0, lifeMax: 700 }); } catch {}
+		if ('vibrate' in navigator && window.innerWidth <= 430) { try { navigator.vibrate(8); } catch {} }
 		updateHUD();
 		log(`Added capacity to all stations!`);
 	});
@@ -1226,9 +1573,28 @@ import { renderAll } from "./src/render/draw.js";
 		if (state.cash < cost) { log(`Need $${cost} for Better Decor.`); return; }
 		state.cash -= cost;
 		state.repLevel += 1;
+		if ('vibrate' in navigator && window.innerWidth <= 430) { try { navigator.vibrate(8); } catch {} }
 		updateHUD();
+		// Trigger a decor visual pulse effect
+		state.fx.push({ type: 'decor', life: 0, lifeMax: 1600 });
 		log(`Reputation boost Lv.${state.repLevel}`);
 	});
+
+	// Manager toggle
+	if (ui.managerToggle) {
+		ui.managerToggle.addEventListener('click', () => {
+			state.managerMode = !state.managerMode;
+			if (state.managerMode) {
+				ensureManagerSpawned();
+				log('Manager Mode ON');
+				state.managerQuipCd = 1000 + Math.floor(rng() * 1500);
+			} else {
+				despawnManager();
+				log('Manager Mode OFF');
+			}
+			updateHUD();
+		});
+	}
 
 	function starterEmployees() {
 		// intentionally left empty: starting with no employees
@@ -1287,6 +1653,94 @@ import { renderAll } from "./src/render/draw.js";
 		aiCache.lastBuildAt = nowMs;
 	}
 
+	// Manager spawn/despawn
+	function ensureManagerSpawned() {
+		if (!state.managerMode) return;
+		if (state.managerEmpId && state.employees.find(e => e.id === state.managerEmpId)) return;
+		// Manager appears as a special Runner (smart AI), free hire
+		const managerKey = 'runner';
+		const id = hireEmployee(managerKey, true);
+		if (id) {
+			state.managerEmpId = id;
+			const e = state.employees.find(x => x.id === id);
+			if (e) {
+				e.name = 'Manager';
+				e.speed = 1.2; // slightly faster runner
+				e.baseSpeed = e.speed;
+				// spawn poof FX
+				state.fx.push({ type: 'poof', x: e.x, y: e.y, life: 0, lifeMax: 700 });
+			}
+			log('Manager is on duty.');
+		}
+	}
+	function despawnManager() {
+		if (!state.managerEmpId) return;
+		// remove minions first
+		state.employees = state.employees.filter(e => !e.isMinion);
+		state.employees = state.employees.filter(e => e.id !== state.managerEmpId);
+		state.managerEmpId = null;
+		log('Manager is off duty.');
+		updateHUD();
+	}
+
+	function managerAutoPurchase(dt) {
+		// disabled: manager no longer purchases or hires
+		return;
+	}
+
+	function randomManagerQuip() {
+		const lines = [
+			"Circle back on that soup.",
+			"Synergy achieved.",
+			"We're in the weeds—deploying bandwidth.",
+			"KPIs: Ketchup, Pickles, Ingredients.",
+			"Coffee is my superpower.",
+			"Hire fast, cook faster!",
+			"This burger needs a postmortem.",
+			"Stakeholders? More like steak holders.",
+			"Approving CAPEX: Capacity upgrade.",
+			"Action item: vibes.",
+		];
+		return lines[Math.floor(rng() * lines.length)];
+	}
+
+	function shouldManagerWork() {
+		if (!state.managerMode || !state.managerEmpId) return false;
+		// manager works only if there are no other non-minion station staff
+		const others = state.employees.filter(e => e.id !== state.managerEmpId && !e.isMinion && e.role === 'station');
+		return others.length === 0;
+	}
+
+	function spawnMinion() {
+		const me = state.employees.find(e => e.id === state.managerEmpId);
+		if (!me) return;
+		// create a temporary runner minion
+		const def = { name: "Minion", cost: 0, role: "runner", speed: 3.0 };
+		const emp = {
+			id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.floor(rng()*1e6)}`,
+			...def,
+			typeKey: 'runner',
+			busy: false,
+			carrying: null,
+			thinkCd: 0,
+			phase: "idle",
+			x: me.x + (rng() < 0.5 ? -30 : 30),
+			y: me.y,
+			task: null,
+			level: 1,
+			xp: 0,
+			xpToNext: 30,
+			baseSpeed: 3.0,
+			baseQuality: 1.0,
+			isMinion: true,
+			lifeMs: 9000 + Math.floor(rng() * 4000),
+		};
+		recomputeEmpStats(emp);
+		state.employees.push(emp);
+		state.fx.push({ type: 'poof', x: emp.x, y: emp.y, life: 0, lifeMax: 600 });
+		log('Manager sent out a minion!');
+	}
+
 	// Init
 	// no starter employees; start with none
 	updateHUD();
@@ -1315,6 +1769,8 @@ import { renderAll } from "./src/render/draw.js";
 	if (sidebar && mobileToggle) {
 		mobileToggle.addEventListener('click', () => {
 			sidebar.classList.toggle('hidden');
+			// allow layout to settle then resize/reflow
+			setTimeout(() => { try { resizeCanvasToDisplaySize(); } catch {} }, 0);
 		});
 	}
 	document.addEventListener('gesturestart', (e) => { e.preventDefault(); }, { passive: false });

@@ -12,6 +12,8 @@ export const ui = {
 	uRep: document.getElementById("upgrade-rep"),
 	empList: document.getElementById("emp-list"),
 	shopButtons: Array.from(document.querySelectorAll(".hire-btn")),
+	managerToggle: document.getElementById("toggle-manager"),
+	managerStatus: document.getElementById("manager-status"),
 };
 
 export function log(msg) {
@@ -38,4 +40,26 @@ export function updateEmpList(employees) {
 		li.textContent = `${e.name}${e.role==='station'?` (${e.station})`:''} – Lv.${level} (${xp}/${xpTo}) – x${e.speed.toFixed(2)}${specials}`;
 		ui.empList.appendChild(li);
 	}
+}
+
+// Smoothly animate a number in an element to a target value
+export function animateNumber(el, toValue, duration = 400) {
+	if (!el) return;
+	const from = parseInt(el.textContent || "0", 10) || 0;
+	if (from === toValue) { el.textContent = String(toValue); return; }
+	const start = performance.now();
+	if (el.__animRaf) cancelAnimationFrame(el.__animRaf);
+	function step(now) {
+		const t = Math.max(0, Math.min(1, (now - start) / duration));
+		// easeOutCubic
+		const eased = 1 - Math.pow(1 - t, 3);
+		const val = Math.round(from + (toValue - from) * eased);
+		el.textContent = String(val);
+		if (t < 1) {
+			el.__animRaf = requestAnimationFrame(step);
+		} else {
+			el.__animRaf = null;
+		}
+	}
+	el.__animRaf = requestAnimationFrame(step);
 } 
