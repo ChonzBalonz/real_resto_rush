@@ -76,20 +76,24 @@ function ensureAmbient(canvas) {
 	if (!canvas) return;
 	if (__ambient.w !== canvas.width || __ambient.h !== canvas.height || __ambient.motes.length === 0) {
 		__ambient.w = canvas.width; __ambient.h = canvas.height;
-		__ambient.motes = Array.from({ length: Math.max(24, Math.floor((canvas.width * canvas.height) / 45000)) }, (_, i) => ({
+		// Lower density on small screens (e.g., iPhone 14 width <= 430px CSS, ~3x DPR)
+		const isSmall = (window.innerWidth <= 430);
+		const baseCount = Math.floor((canvas.width * canvas.height) / (isSmall ? 90000 : 45000));
+		const count = Math.max(isSmall ? 14 : 24, baseCount);
+		__ambient.motes = Array.from({ length: count }, () => ({
 			x: Math.random() * canvas.width,
 			y: Math.random() * (canvas.height - 130),
 			r: 0.6 + Math.random() * 1.4,
-			vx: (-0.15 + Math.random() * 0.3),
-			vy: (-0.08 + Math.random() * 0.16),
-			alpha: 0.06 + Math.random() * 0.08,
+			vx: (-0.10 + Math.random() * 0.20),
+			vy: (-0.06 + Math.random() * 0.12),
+			alpha: (isSmall ? 0.035 : 0.06) + Math.random() * (isSmall ? 0.05 : 0.08),
 			phase: Math.random() * Math.PI * 2,
 		}));
 		// Build scanline pattern (once per size)
 		const pat = document.createElement('canvas');
 		pat.width = 2; pat.height = 2;
 		const pg = pat.getContext('2d');
-		pg.fillStyle = "rgba(0,0,0,0.12)"; pg.fillRect(0, 0, 2, 1);
+		pg.fillStyle = "rgba(0,0,0,0.10)"; pg.fillRect(0, 0, 2, 1);
 		pg.fillStyle = "rgba(0,0,0,0.0)"; pg.fillRect(0, 1, 2, 1);
 		__ambient.scanPattern = pg.createPattern ? pg.createPattern(pat, 'repeat') : null;
 	}
@@ -143,14 +147,15 @@ function drawAmbientFrontLayer(ctx, canvas) {
 	ctx.save();
 	const vg = ctx.createRadialGradient(cx, cy, r * 0.6, cx, cy, r);
 	vg.addColorStop(0, 'rgba(0,0,0,0)');
-	vg.addColorStop(1, 'rgba(0,0,0,0.18)');
+	vg.addColorStop(1, 'rgba(0,0,0,0.16)');
 	ctx.fillStyle = vg;
 	ctx.fillRect(0, 0, canvas.width, canvas.height - 130);
 	ctx.restore();
-	// Scanlines overlay
+	// Scanlines overlay (lighter on small screens)
 	if (__ambient.scanPattern) {
 		ctx.save();
-		ctx.globalAlpha = 0.06;
+		const isSmall = (window.innerWidth <= 430);
+		ctx.globalAlpha = isSmall ? 0.035 : 0.06;
 		ctx.fillStyle = __ambient.scanPattern;
 		ctx.fillRect(0, 0, canvas.width, canvas.height - 130);
 		ctx.restore();

@@ -269,4 +269,9 @@ body, #app, #game {
 		appearance: none; border: 1px solid #262738; background: #1c1d2a; color: var(--text);
 		padding: 10px 12px; border-radius: 999px; font-weight: 700; z-index: 10;
 	}
+	/* Enable vertical scrolling for comfortable layout */
+	html, body { overflow-y: auto; }
+	#app { height: auto; min-height: 100dvh; }
+	.main { overflow: visible; }
+	.sidebar { max-height: none; }
 }

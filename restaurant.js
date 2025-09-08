@@ -1767,8 +1767,13 @@ import { renderAll } from "./src/render/draw.js";
 	const sidebar = document.getElementById('sidebar');
 	const mobileToggle = document.getElementById('mobile-toggle');
 	if (sidebar && mobileToggle) {
+		mobileToggle.setAttribute('aria-expanded', 'true');
 		mobileToggle.addEventListener('click', () => {
 			sidebar.classList.toggle('hidden');
+			const open = !sidebar.classList.contains('hidden');
+			mobileToggle.textContent = open ? 'Close' : 'Menu';
+			mobileToggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+			mobileToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
 			// allow layout to settle then resize/reflow
 			setTimeout(() => { try { resizeCanvasToDisplaySize(); } catch {} }, 0);
 		});
